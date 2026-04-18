@@ -57,7 +57,7 @@ struct NilsAppApp: App {
                 }
             }
         }
-        .onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase) { oldPhase, newPhase in
             switch newPhase {
             case .active:
                 // Reconnect to the Spotify App Remote SDK when coming to the foreground

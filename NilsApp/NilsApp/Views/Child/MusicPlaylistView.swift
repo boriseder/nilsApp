@@ -35,7 +35,7 @@ struct MusicPlaylistView: View {
                 .listStyle(.plain) // Use plain list style for a cleaner look
             }
         }
-        .navigationTitle(viewModel.playlist.name)
+        .navigationTitle(viewModel.playlists.count == 1 ? viewModel.playlists.first?.name ?? "Music" : "Music")
         .onAppear {
             viewModel.fetchTracks()
         }

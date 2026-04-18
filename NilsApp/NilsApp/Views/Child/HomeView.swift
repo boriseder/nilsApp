@@ -16,21 +16,29 @@ struct HomeView: View {
     ]
 
     var body: some View {
-        // The NavigationView is used for navigation and toolbar items.
-        NavigationView {
+        // NavigationStack replaces NavigationView for modern iOS and avoids iPad split-view bugs.
+        NavigationStack {
             ZStack {
                 // A subtle background color for the home screen
-                Color(.systemGroupedBackground).ignoresSafeArea()
+                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
 
-                // TODO: Add empty state view when no content is curated at all.
-
+                if persistenceService.curatedContent.audiobookSeries.isEmpty &&
+                   persistenceService.curatedContent.musicPlaylists.isEmpty &&
+                   persistenceService.curatedContent.podcastShows.isEmpty {
+                    emptyCuratedContentState
+                } else {
+                    
                 ScrollView {
                     LazyVGrid(columns: columns, spacing: 40) {
                         // Only show the Audiobook tile if content has been curated.
-                        if let firstAudiobookArtist = persistenceService.curatedContent.audiobookSeries.first {
+                        if !persistenceService.curatedContent.audiobookSeries.isEmpty {
                             // NavigationLink to the AudiobookGridView
                             NavigationLink {
-                                AudiobookGridView(viewModel: AudiobookGridViewModel(artist: firstAudiobookArtist, apiService: spotifyAPIService))
+                                if persistenceService.curatedContent.audiobookSeries.count == 1 {
+                                    AudiobookGridView(viewModel: AudiobookGridViewModel(artists: persistenceService.curatedContent.audiobookSeries, apiService: spotifyAPIService))
+                                } else {
+                                    AudiobookSeriesSelectionView(artists: persistenceService.curatedContent.audiobookSeries)
+                                }
                             } label: {
                                 CategoryTile(
                                     title: "Audiobooks",
@@ -38,22 +46,46 @@ struct HomeView: View {
                                     accentColor: .orange
                                 )
                             }
-                            // Apply debounced tap to prevent rapid navigation
-                            .buttonStyle(DebouncedButtonStyle())
                         }
 
                         // Only show the Music tile if content has been curated.
                         if !persistenceService.curatedContent.musicPlaylists.isEmpty {
-                            Text("Music Tile") // Placeholder
+                            NavigationLink {
+                                if persistenceService.curatedContent.musicPlaylists.count == 1 {
+                                    MusicPlaylistView(viewModel: PlaylistViewModel(playlists: persistenceService.curatedContent.musicPlaylists, apiService: spotifyAPIService))
+                                } else {
+                                    MusicPlaylistSelectionView(playlists: persistenceService.curatedContent.musicPlaylists)
+                                }
+                            } label: {
+                                CategoryTile(
+                                    title: "Music",
+                                    imageName: "music.note.list",
+                                    accentColor: .purple
+                                )
+                            }
                         }
 
                         // Only show the Podcast tile if content has been curated.
                         if !persistenceService.curatedContent.podcastShows.isEmpty {
-                            Text("Podcasts Tile") // Placeholder
+                            NavigationLink {
+                                if persistenceService.curatedContent.podcastShows.count == 1 {
+                                    PodcastShowView(viewModel: PodcastViewModel(shows: persistenceService.curatedContent.podcastShows, apiService: spotifyAPIService))
+                                } else {
+                                    PodcastShowSelectionView(shows: persistenceService.curatedContent.podcastShows)
+                                }
+                            } label: {
+                                CategoryTile(
+                                    title: "Podcasts",
+                                    imageName: "mic.fill",
+                                    accentColor: .green
+                                )
+                            }
                         }
                     }
                     .padding(40)
                 }
+                    
+                } // End of else block
                 
                 // Mini-player bar appears at the bottom when a track is loaded
                 // This is placed within the ZStack to float above the ScrollView content.
@@ -66,7 +98,7 @@ struct HomeView: View {
                     }
                 }
             }
-            // Navigation title and toolbar items are associated with the NavigationView.
+            // Navigation title and toolbar items are associated with the NavigationStack.
                 .navigationTitle("My Library")
                 .navigationBarTitleDisplayMode(.large)
                 .toolbar {
@@ -82,11 +114,9 @@ struct HomeView: View {
                 }
             }
         }
-        .navigationViewStyle(.stack) // Use stack style for iPad
         .sheet(isPresented: $viewModel.showAdminArea) {
-            // The Admin view will be presented here.
-            // For now, it's a placeholder Text.
-            Text("Admin Area Placeholder")
+            PINEntryView(viewModel: AdminViewModel(persistenceService: persistenceService, spotifyAPIService: spotifyAPIService))
+                .environmentObject(persistenceService)
         }
         // Present the NowPlayingView as a sheet when showNowPlayingSheet is true.
         .sheet(isPresented: $showNowPlayingSheet) {
@@ -123,6 +153,25 @@ struct HomeView: View {
             .padding(10)
             .contentShape(RoundedRectangle(cornerRadius: 30)) // Make the entire area tappable
         }
+    }
+    
+    /// State view shown when no content has been curated by the parent yet.
+    private var emptyCuratedContentState: some View {
+        VStack(spacing: 30) {
+            Image(systemName: "wand.and.stars")
+                .font(.system(size: 100))
+                .foregroundColor(.accentColor)
+            
+            Text("Welcome to NilsApp!")
+                .font(.largeTitle)
+                .fontWeight(.bold)
+            
+            Text("It looks like you haven't curated any content yet. Tap the gear icon to get started!")
+                .font(.title2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 80)
+        }
+        .foregroundColor(.secondary)
     }
 }
 

@@ -17,12 +17,12 @@ final class PlaylistViewModel: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
     
-    let playlist: CuratedPlaylist
+    let playlists: [CuratedPlaylist]
     private let apiService: SpotifyAPIService
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlaylistViewModel")
     
-    init(playlist: CuratedPlaylist, apiService: SpotifyAPIService) {
-        self.playlist = playlist
+    init(playlists: [CuratedPlaylist], apiService: SpotifyAPIService) {
+        self.playlists = playlists
         self.apiService = apiService
     }
     
@@ -32,16 +32,17 @@ final class PlaylistViewModel: ObservableObject {
         
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching tracks for playlist: \(self.playlist.name, privacy: .public)")
+        logger.info("Fetching tracks for \(self.playlists.count) playlists.")
         
         Task {
             do {
-                let fetchedTracks = try await apiService.fetchPlaylistTracks(playlistId: playlist.id)
+                let playlistIds = playlists.map { $0.id }
+                let fetchedTracks = try await apiService.fetchPlaylistTracks(playlistIds: playlistIds)
                 self.tracks = fetchedTracks
-                self.logger.info("Successfully fetched \(fetchedTracks.count) tracks for \(self.playlist.name, privacy: .public)")
+                self.logger.info("Successfully fetched \(fetchedTracks.count) total tracks.")
             } catch {
                 self.errorMessage = "Failed to load music: \(error.localizedDescription)"
-                self.logger.error("Failed to fetch tracks for playlist \(self.playlist.id, privacy: .public): \(error.localizedDescription)")
+                self.logger.error("Failed to fetch playlist tracks: \(error.localizedDescription)")
             }
             self.isLoading = false
         }

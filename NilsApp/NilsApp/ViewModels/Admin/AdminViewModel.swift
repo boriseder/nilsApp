@@ -9,6 +9,7 @@ import Foundation
 import Combine
 import os
 import SwiftUI // For @AppStorage
+import UIKit // Required for UIApplication
 
 /// ViewModel for the Admin area, handling PIN validation, content search, and curation.
 @MainActor
@@ -100,6 +101,14 @@ final class AdminViewModel: ObservableObject {
         musicSearchResults = []
         podcastSearchResults = []
         logger.info("Admin area locked.")
+    }
+    
+    // MARK: - Spotify Authentication
+    
+    func loginToSpotify() {
+        if let authURL = spotifyAPIService.getAuthorizationURL() {
+            UIApplication.shared.open(authURL)
+        }
     }
     
     /// Clears all search results and queries.

@@ -17,12 +17,12 @@ final class AudiobookGridViewModel: ObservableObject {
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
     
-    let artist: CuratedArtist
+    let artists: [CuratedArtist]
     private let apiService: SpotifyAPIService
     private let logger = Logger(subsystem: "com.nilsapp", category: "AudiobookGridViewModel")
     
-    init(artist: CuratedArtist, apiService: SpotifyAPIService) {
-        self.artist = artist
+    init(artists: [CuratedArtist], apiService: SpotifyAPIService) {
+        self.artists = artists
         self.apiService = apiService
     }
     
@@ -32,16 +32,18 @@ final class AudiobookGridViewModel: ObservableObject {
         
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching albums for artist: \(self.artist.name, privacy: .public)")
+        logger.info("Fetching albums for \(self.artists.count) artists.")
         
         Task {
             do {
-                let fetchedAlbums = try await apiService.fetchAudiobookAlbums(artistId: artist.id)
+                // Extract all IDs from the array of artists
+                let artistIds = artists.map { $0.id }
+                let fetchedAlbums = try await apiService.fetchAudiobookAlbums(artistIds: artistIds)
                 self.albums = fetchedAlbums
-                self.logger.info("Successfully fetched \(fetchedAlbums.count) albums for \(self.artist.name, privacy: .public)")
+                self.logger.info("Successfully fetched \(fetchedAlbums.count) total albums.")
             } catch {
                 self.errorMessage = "Failed to load stories: \(error.localizedDescription)"
-                self.logger.error("Failed to fetch albums for artist \(self.artist.id, privacy: .public): \(error.localizedDescription)")
+                self.logger.error("Failed to fetch audiobook albums: \(error.localizedDescription)")
             }
             self.isLoading = false
         }

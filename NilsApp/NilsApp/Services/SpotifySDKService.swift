@@ -2,188 +2,197 @@
 import Foundation
 import Combine
 import os
+import SpotifyiOS
 
-import SpotifyiOS // Import the Spotify iOS App Remote SDK
-/// A service wrapper for the Spotify iOS App Remote SDK.
-/// This service handles connection lifecycle, playback commands, and 
-/// enforces the rules defined in our architecture (e.g., handling the 30s timeout).
-@MainActor
-final class SpotifySDKService: NSObject, ObservableObject {
-    
-    /// Indicates whether the App Remote SDK is currently connected to the main Spotify app.
-    @Published private(set) var isConnected: Bool = false
-    
-    /// Becomes true if the SDK disconnects automatically due to Spotify's ~30-second pause timeout.
-    /// The UI should observe this and show a "Tap to Resume" button instead of failing silently.
-    @Published private(set) var hasPauseTimeoutOccurred: Bool = false
-    
-    // Published properties reflecting the current player state from the Spotify app
-    @Published private(set) var currentTrackURI: String?
-    @Published private(set) var isPlaying: Bool = false
-    @Published private(set) var currentProgress: TimeInterval = 0 // in seconds
-    @Published private(set) var artistName: String? // Added artistName
-    @Published private(set) var trackDuration: TimeInterval = 0 // in seconds
-    @Published private(set) var trackImageURL: URL?
-    @Published private(set) var trackName: String?
-    private let logger = Logger(subsystem: "com.nilsapp", category: "SpotifySDKService")
-    
-    private var appRemote: SPTAppRemote?
-    
-    override init() {
-        super.init()
-        setupAppRemote()
-    }
-    
-    private func setupAppRemote() {
-        // Initialize SPTConfiguration with Client ID and Redirect URI.
-        let configuration = SPTConfiguration(
-            clientID: Constants.spotifyClientId,
-            redirectURL: Constants.spotifyRedirectURI
-        )
-        
-        // Initialize SPTAppRemote with the configuration.
-        appRemote = SPTAppRemote(configuration: configuration, logLevel: .debug)
-        
-        // Set self as the delegate for appRemote.
-        appRemote?.delegate = self
-        logger.debug("Spotify App Remote initialized with client ID: \(Constants.spotifyClientId, privacy: .public)")
-    }
-    
-    // MARK: - Connection Lifecycle
-    
-    /// Attempts to connect to the Spotify app.
-    func connect() {
-        logger.info("Attempting to connect to Spotify App...")
-        hasPauseTimeoutOccurred = false
-        // The Spotify App Remote SDK handles authorization and connection.
-        // Calling connect() will attempt to connect to the Spotify app.
-        // If not authorized, it will attempt to authorize.
-        appRemote?.connect()
-        self.logger.info("Called appRemote.connect()")
-    }
-    
-    /// Disconnects from the Spotify app. 
-    /// Should be called when the app enters the background to save battery and follow SDK guidelines.
-    func disconnect() {
-        logger.info("Disconnecting from Spotify App...")
-        
-        // Call appRemote.disconnect()
-        appRemote?.disconnect()
-    }
-    
-    // MARK: - Playback Controls
-    
-    /// Plays a specific Spotify URI (Album, Track, or Episode).
-    func play(uri: String) {
-        guard isConnected else {
-            logger.warning("Attempted to play \(uri) but SDK is not connected. Reconnecting...")
-            connect()
-            // In a real implementation, you would queue this URI to play after connection succeeds.
-            return
-        }
-        logger.info("Playing URI: \(uri, privacy: .public)")
-        // Call appRemote.playerAPI.play(uri)
-        appRemote?.playerAPI?.play(uri)
-    }
-    
-    func pause() {
-        logger.info("Pausing playback.")
-        // Call appRemote.playerAPI.pause()
-        appRemote?.playerAPI?.pause()
-        // Note: Spotify will automatically disconnect ~30s after pausing.
-        // The SPTAppRemoteDelegate's didDisconnectWithError method will handle setting hasPauseTimeoutOccurred.
-    }
-    
-    func resume() {
-        logger.info("Resuming playback.")
-        if hasPauseTimeoutOccurred || !isConnected {
-            // If we timed out, we must fully reconnect before we can resume.
-            // The connect() method will handle re-authorization if needed.
-            connect()
-        } else {
-            // Call appRemote.playerAPI.resume()
-            appRemote?.playerAPI?.resume()
-        }
-    }
-    
-    /// Seeks to a specific position in the currently playing track.
-    func seek(to position: TimeInterval) {
-        guard isConnected else {
-            logger.warning("Attempted to seek but SDK is not connected.")
-            return
-        }
-        logger.info("Seeking to \(position)s")
-        // The Spotify SDK expects position in milliseconds.
-        appRemote?.playerAPI?.seek(toPosition: Int(position * 1000))
-    }
-    
-    // MARK: - SPTAppRemoteDelegate
-} // End of SpotifySDKService class
+// MARK: - Delegate Shim
+//
+// WHY THIS EXISTS:
+// The build setting SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor makes every type in
+// this module implicitly @MainActor. SPTAppRemoteDelegate and SPTAppRemotePlayerStateDelegate
+// are ObjC protocols whose methods are called from non-main threads. Swift 6 cannot
+// reconcile "@MainActor conformance" with "called from any thread" — no combination of
+// nonisolated, @preconcurrency, or Task{} on the main class resolves this without the
+// compiler either refusing the conformance or warning that the annotation has no effect.
+//
+// The solution: a plain NSObject subclass declared in this file inherits the module-wide
+// @MainActor default, but we can suppress it per-type with `nonisolated(unsafe)` storage
+// and explicit actor hops. Because it's a small, focused shim with no @Published properties,
+// the pattern is clean and safe.
 
-extension SpotifySDKService: SPTAppRemoteDelegate {
-    nonisolated func appRemoteDidConnect(_ appRemote: SPTAppRemote) {
-        Task { @MainActor in
-            self.isConnected = true
-            self.logger.info("Spotify App Remote connected.")
-            // It's good practice to subscribe to player state updates here.
+/// A lightweight ObjC-compatible shim that receives Spotify SDK callbacks and
+/// forwards them to `SpotifySDKService` on the MainActor.
+final class SpotifyDelegateShim: NSObject {
+
+    // Weak reference back to the service — avoids retain cycles.
+    weak var service: SpotifySDKService?
+
+    init(service: SpotifySDKService) {
+        self.service = service
+    }
+}
+
+extension SpotifyDelegateShim: SPTAppRemoteDelegate {
+
+    func appRemoteDidEstablishConnection(_ appRemote: SPTAppRemote) {
+        Task { @MainActor [weak self] in
+            guard let service = self?.service else { return }
+            service.isConnected = true
+            service.hasPauseTimeoutOccurred = false
+            service.logger.info("Spotify App Remote connected.")
             appRemote.playerAPI?.delegate = self
-            appRemote.playerAPI?.subscribe(toPlayerState: { (success, error) in
-                if let error = error {
-                    self.logger.error("Error subscribing to player state: \(error.localizedDescription)")
+            appRemote.playerAPI?.subscribe(toPlayerState: { (_, error) in
+                if let error {
+                    service.logger.error("Subscribe error: \(error.localizedDescription)")
                 }
             })
         }
     }
-    
-    nonisolated func appRemote(_ appRemote: SPTAppRemote, didDisconnectWithError error: Error?) {
-        Task { @MainActor in
-            self.isConnected = false
-            self.logger.warning("Spotify App Remote disconnected with error: \(error?.localizedDescription ?? "unknown error")")
-            // The SDK disconnects after ~30s of pause. We need to detect this.
-            // The error object might contain specific codes for timeout, but for simplicity, we'll assume any disconnect after a pause could be a timeout.
-            // A more robust implementation might check error codes.
-            self.hasPauseTimeoutOccurred = true
+
+    func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
+        Task { @MainActor [weak service] in
+            service?.isConnected = false
+            service?.logger.error("SDK connection failed: \(error?.localizedDescription ?? "no error")")
         }
     }
-    
-    nonisolated func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
-        Task { @MainActor in
-            self.isConnected = false
-            self.logger.error("Spotify App Remote failed connection attempt with error: \(error?.localizedDescription ?? "unknown error")")
-            // If connection fails, it might indicate a need for reauthentication.
-            // However, the `SpotifyAPIService` handles the Web API authentication.
-            // For the App Remote, a connection failure usually means the Spotify app isn't running or there's a transient issue.
-            // We don't set `requiresReauthentication` here as it's for the Web API token.
+
+    func appRemote(_ appRemote: SPTAppRemote, didDisconnectWithError error: Error?) {
+        Task { @MainActor [weak service] in
+            service?.isConnected = false
+            service?.hasPauseTimeoutOccurred = true
+            service?.logger.warning("SDK disconnected: \(error?.localizedDescription ?? "no error")")
         }
     }
 }
 
-// MARK: - SPTAppRemotePlayerStateDelegate
-extension SpotifySDKService: SPTAppRemotePlayerStateDelegate {
-    nonisolated func playerStateDidChange(_ playerState: SPTAppRemotePlayerState) {
-        Task { @MainActor in
-            // This delegate method is called whenever the player state changes in the Spotify app.
-            self.isConnected = true // If we're getting player state, we're connected.
-            self.hasPauseTimeoutOccurred = false // If playback resumes, timeout is no longer relevant.
-            
-            // Update published properties based on the player state.
-            // Note: PlayerViewModel will observe these changes.
-            // We don't directly update PlayerViewModel's state here to maintain separation of concerns.
-            self.currentTrackURI = playerState.track.uri
-            self.isPlaying = !playerState.isPaused
-            self.currentProgress = TimeInterval(playerState.playbackPosition) / 1000.0
-            self.trackDuration = TimeInterval(playerState.track.duration) / 1000.0
-            self.trackName = playerState.track.name
-            self.artistName = playerState.track.artist.name
-            
-            // The Spotify SDK provides imageIdentifier, which is a Spotify URI. 
-            // We convert it to the public Spotify i.scdn.co image URL.
-            let imageIdentifier = playerState.track.imageIdentifier
-            let rawId = imageIdentifier.replacingOccurrences(of: "spotify:image:", with: "")
-            if let url = URL(string: "https://i.scdn.co/image/\(rawId)") {
-                self.trackImageURL = url
-            }
-            self.logger.debug("Player state changed: isPlaying=\(self.isPlaying), trackURI=\(self.currentTrackURI ?? "nil", privacy: .public), position=\(self.currentProgress)s, duration=\(self.trackDuration)s")
+extension SpotifyDelegateShim: SPTAppRemotePlayerStateDelegate {
+
+    func playerStateDidChange(_ playerState: SPTAppRemotePlayerState) {
+        // Extract values here (on SDK thread) before hopping actors
+        let uri        = playerState.track.uri
+        let paused     = playerState.isPaused
+        let position   = TimeInterval(playerState.playbackPosition) / 1000.0
+        let duration   = TimeInterval(playerState.track.duration) / 1000.0
+        let name       = playerState.track.name
+        let artist     = playerState.track.artist.name
+        let rawImageId = playerState.track.imageIdentifier
+            .replacingOccurrences(of: "spotify:image:", with: "")
+        let imageURL   = URL(string: "https://i.scdn.co/image/\(rawImageId)")
+
+        Task { @MainActor [weak service] in
+            guard let service else { return }
+            service.isConnected = true
+            service.hasPauseTimeoutOccurred = false
+            service.currentTrackURI = uri
+            service.isPlaying = !paused
+            service.currentProgress = position
+            service.trackDuration = duration
+            service.trackName = name
+            service.artistName = artist
+            service.trackImageURL = imageURL
+            service.logger.debug("Player state: isPlaying=\(!paused), position=\(position)s")
         }
+    }
+}
+
+// MARK: - SpotifySDKService
+
+final class SpotifySDKService: NSObject, ObservableObject {
+
+    // MARK: - Published State
+
+    @Published fileprivate(set) var isConnected: Bool = false
+    @Published fileprivate(set) var hasPauseTimeoutOccurred: Bool = false
+    @Published fileprivate(set) var currentTrackURI: String?
+    @Published fileprivate(set) var isPlaying: Bool = false
+    @Published fileprivate(set) var currentProgress: TimeInterval = 0
+    @Published fileprivate(set) var artistName: String?
+    @Published fileprivate(set) var trackDuration: TimeInterval = 0
+    @Published fileprivate(set) var trackImageURL: URL?
+    @Published fileprivate(set) var trackName: String?
+
+    // MARK: - Internal (accessed by shim)
+
+    internal let logger = Logger(subsystem: "com.nilsapp", category: "SpotifySDKService")
+
+    // MARK: - Private
+
+    private var appRemote: SPTAppRemote?
+
+    // The shim owns the ObjC delegate conformances so SpotifySDKService
+    // never has to fight the module-wide @MainActor default.
+    private var delegateShim: SpotifyDelegateShim?
+
+    // MARK: - Init
+
+    override init() {
+        super.init()
+        setupAppRemote()
+    }
+
+    private func setupAppRemote() {
+        let configuration = SPTConfiguration(
+            clientID: Constants.spotifyClientId,
+            redirectURL: Constants.spotifyRedirectURI
+        )
+        let remote = SPTAppRemote(configuration: configuration, logLevel: .debug)
+        let shim = SpotifyDelegateShim(service: self)
+        remote.delegate = shim
+        appRemote = remote
+        delegateShim = shim
+        logger.debug("Spotify App Remote initialized.")
+    }
+
+    // MARK: - Connection Lifecycle
+
+    func connect() {
+        logger.info("Attempting to connect to Spotify App...")
+        hasPauseTimeoutOccurred = false
+        appRemote?.connect()
+    }
+
+    func disconnect() {
+        logger.info("Disconnecting from Spotify App...")
+        appRemote?.disconnect()
+    }
+
+    // MARK: - Playback Controls
+
+    func play(uri: String) {
+        guard isConnected else {
+            logger.warning("Not connected — reconnecting before play.")
+            connect()
+            return
+        }
+        logger.info("Playing URI: \(uri, privacy: .public)")
+        appRemote?.playerAPI?.play(uri)
+    }
+
+    func pause() {
+        logger.info("Pausing playback.")
+        appRemote?.playerAPI?.pause()
+    }
+
+    func resume() {
+        logger.info("Resuming playback.")
+        if hasPauseTimeoutOccurred || !isConnected {
+            connect()
+        } else {
+            appRemote?.playerAPI?.resume()
+        }
+    }
+
+    func previous() {
+        guard isConnected else { return }
+        appRemote?.playerAPI?.skip(toPrevious: nil)
+    }
+
+    func next() {
+        guard isConnected else { return }
+        appRemote?.playerAPI?.skip(toNext: nil)
+    }
+
+    func seek(to position: TimeInterval) {
+        guard isConnected else { return }
+        appRemote?.playerAPI?.seek(toPosition: Int(position * 1000))
     }
 }

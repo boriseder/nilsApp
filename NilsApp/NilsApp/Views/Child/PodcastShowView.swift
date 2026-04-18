@@ -35,7 +35,7 @@ struct PodcastShowView: View {
                 .listStyle(.plain) // Use plain list style for a cleaner look
             }
         }
-        .navigationTitle(viewModel.show.name)
+        .navigationTitle(viewModel.shows.count == 1 ? viewModel.shows.first?.name ?? "Podcasts" : "Podcasts")
         .onAppear {
             viewModel.fetchEpisodes()
         }

@@ -37,7 +37,7 @@ struct PINEntryView: View {
                     .font(.title)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 250)
-                    .onChange(of: enteredPIN) { _ in
+                .onChange(of: enteredPIN) {
                         // Clear error state as soon as the user starts typing again
                         if viewModel.pinError {
                             viewModel.pinError = false

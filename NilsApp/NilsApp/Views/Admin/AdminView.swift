@@ -18,6 +18,7 @@ struct AdminView: View {
                 PINEntryView(viewModel: viewModel) // PINEntryView will handle its own dismissal
             } else {
                 List {
+                    spotifyAccountSection
                     audiobooksSection
                     musicSection
                     podcastsSection
@@ -42,6 +43,26 @@ struct AdminView: View {
     }
     
     // MARK: - List Sections
+    
+    private var spotifyAccountSection: some View {
+        Section(header: Text("Spotify Account Status")) {
+            HStack {
+                Text("Logged In:")
+                Spacer()
+                Image(systemName: viewModel.spotifyAPIService.isAuthorized ? "checkmark.circle.fill" : "xmark.circle.fill")
+                    .foregroundColor(viewModel.spotifyAPIService.isAuthorized ? .green : .red)
+            }
+            
+            if viewModel.spotifyAPIService.requiresReauthentication {
+                Text("Reauthentication required. Please log in again.")
+                    .foregroundColor(.red)
+            }
+            
+            Button("Log In / Reauthorize Spotify") {
+                viewModel.loginToSpotify()
+            }
+        }
+    }
     
     private var audiobooksSection: some View {
         Section(header: Text("Audiobook Series")) {

@@ -33,7 +33,7 @@ struct AudiobookGridView: View {
                 }
             }
         }
-        .navigationTitle(viewModel.artist.name)
+        .navigationTitle(viewModel.artists.count == 1 ? viewModel.artists.first?.name ?? "Audiobooks" : "Audiobooks")
         .onAppear {
             viewModel.fetchAlbums()
         }
