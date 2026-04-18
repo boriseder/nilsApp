@@ -38,6 +38,6 @@ struct AudiobookSeriesSelectionView: View {
                 .padding(32)
             }
         }
-        .navigationTitle("Audiobooks")
+        .navigationTitle("Meine Hörbücher")
     }
 }

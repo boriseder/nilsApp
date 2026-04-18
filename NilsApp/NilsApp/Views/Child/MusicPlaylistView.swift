@@ -25,8 +25,7 @@ struct MusicPlaylistView: View {
                 errorStateView(message: error)
             } else if viewModel.tracks.isEmpty {
                 emptyStateView(message: "No music found in this playlist.")
-            }
-            else {
+            } else {
                 List {
                     ForEach(viewModel.tracks) { track in
                         trackRow(for: track)
@@ -35,7 +34,7 @@ struct MusicPlaylistView: View {
                 .listStyle(.plain) // Use plain list style for a cleaner look
             }
         }
-        .navigationTitle(viewModel.playlists.count == 1 ? viewModel.playlists.first?.name ?? "Music" : "Music")
+        .navigationTitle(viewModel.playlists.count == 1 ? viewModel.playlists.first?.name ?? "Meine Playlists" : "Meine Playlists")
         .onAppear {
             viewModel.fetchTracks()
         }

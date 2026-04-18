@@ -72,8 +72,8 @@ struct SpotifyEpisode: Identifiable, Hashable {
 
 /// Enum to categorize content types for searching in the Admin area.
 enum SearchCategory: String, CaseIterable, Identifiable {
-    case audiobooks = "Audiobooks"
-    case music = "Music Playlists"
-    case podcasts = "Podcasts"
+    case audiobooks = "Meine Hörbücher"
+    case music = "Meine Playlists"
+    case podcasts = "Meine Videos"
     var id: String { self.rawValue }
 }

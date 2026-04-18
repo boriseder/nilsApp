@@ -25,8 +25,7 @@ struct PodcastShowView: View {
                 errorStateView(message: error)
             } else if viewModel.episodes.isEmpty {
                 emptyStateView(message: "No episodes found for this show.")
-            }
-            else {
+            } else {
                 List {
                     ForEach(viewModel.episodes) { episode in
                         episodeRow(for: episode)
@@ -35,7 +34,7 @@ struct PodcastShowView: View {
                 .listStyle(.plain) // Use plain list style for a cleaner look
             }
         }
-        .navigationTitle(viewModel.shows.count == 1 ? viewModel.shows.first?.name ?? "Podcasts" : "Podcasts")
+        .navigationTitle(viewModel.shows.count == 1 ? viewModel.shows.first?.name ?? "Meine Videos" : "Meine Videos")
         .onAppear {
             viewModel.fetchEpisodes()
         }

@@ -38,6 +38,6 @@ struct MusicPlaylistSelectionView: View {
                 .padding(32)
             }
         }
-        .navigationTitle("Music")
+        .navigationTitle("Meine Playlists")
     }
 }

@@ -73,9 +73,9 @@ struct AdminSearchView: View {
     
     private var titleForCategory: String {
         switch category {
-        case .audiobooks: return "Search Audiobook Series"
-        case .music: return "Search Music Playlists"
-        case .podcasts: return "Search Podcasts"
+        case .audiobooks: return "Search Meine Hörbücher"
+        case .music: return "Search Meine Playlists"
+        case .podcasts: return "Search Meine Videos"
         }
     }
     

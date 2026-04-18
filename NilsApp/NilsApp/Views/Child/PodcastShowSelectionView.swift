@@ -38,6 +38,6 @@ struct PodcastShowSelectionView: View {
                 .padding(32)
             }
         }
-        .navigationTitle("Podcasts")
+        .navigationTitle("Meine Videos")
     }
 }

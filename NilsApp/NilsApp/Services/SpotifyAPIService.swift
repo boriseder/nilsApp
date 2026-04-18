@@ -270,7 +270,7 @@ final class SpotifyAPIService: ObservableObject {
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
-                    try await Task.sleep(nanoseconds: UInt64(retryAfter) * 1_000_000_000)
+                try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
                 
@@ -362,7 +362,7 @@ final class SpotifyAPIService: ObservableObject {
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
-                    try await Task.sleep(nanoseconds: UInt64(retryAfter) * 1_000_000_000)
+                    try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
 
@@ -481,7 +481,7 @@ final class SpotifyAPIService: ObservableObject {
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
-                    try await Task.sleep(nanoseconds: UInt64(retryAfter) * 1_000_000_000)
+                    try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
 
@@ -555,11 +555,11 @@ final class SpotifyAPIService: ObservableObject {
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "type", value: "artist"),
-            URLQueryItem(name: "limit", value: "20"),
-            URLQueryItem(name: "market", value: "from_token")
+            URLQueryItem(name: "type", value: "artist")
         ]
         guard let url = components.url else { throw APIError.notAuthorized }
+        
+        logger.debug("Executing Audiobook Search URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -572,6 +572,16 @@ final class SpotifyAPIService: ObservableObject {
             let retry = try await URLSession.shared.data(for: request)
             data = retry.0
             response = retry.1
+        }
+        
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            if httpResponse.statusCode == 400 {
+                logger.warning("Spotify rejected the search query '\(query)'. Returning empty results.")
+                return []
+            }
+            let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
+            logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
+            throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
         }
         
         struct SearchResponse: Decodable { let artists: ArtistsPage? }
@@ -626,7 +636,7 @@ final class SpotifyAPIService: ObservableObject {
                     throw APIError.rateLimited(retryAfter: retryAfter)
                 }
                 logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
-                try await Task.sleep(nanoseconds: UInt64(retryAfter) * 1_000_000_000)
+                try await Task.sleep(for: .seconds(retryAfter))
                 continue
             }
             
@@ -678,11 +688,11 @@ final class SpotifyAPIService: ObservableObject {
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
         components.queryItems = [
             URLQueryItem(name: "q", value: query),
-            URLQueryItem(name: "type", value: "show"),
-            URLQueryItem(name: "limit", value: "20"),
-            URLQueryItem(name: "market", value: "from_token")
+            URLQueryItem(name: "type", value: "show")
         ]
         guard let url = components.url else { throw APIError.notAuthorized }
+        
+        logger.debug("Executing Podcast Search URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -695,6 +705,16 @@ final class SpotifyAPIService: ObservableObject {
             let retry = try await URLSession.shared.data(for: request)
             data = retry.0
             response = retry.1
+        }
+        
+        if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
+            if httpResponse.statusCode == 400 {
+                logger.warning("Spotify rejected the search query '\(query)'. Returning empty results.")
+                return []
+            }
+            let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
+            logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
+            throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
         }
         
         struct SearchResponse: Decodable { let shows: ShowsPage? }

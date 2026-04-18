@@ -28,62 +28,62 @@ struct HomeView: View {
                     emptyCuratedContentState
                 } else {
                     
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 40) {
-                        // Only show the Audiobook tile if content has been curated.
-                        if !persistenceService.curatedContent.audiobookSeries.isEmpty {
-                            // NavigationLink to the AudiobookGridView
-                            NavigationLink {
-                                if persistenceService.curatedContent.audiobookSeries.count == 1 {
-                                    AudiobookGridView(viewModel: AudiobookGridViewModel(artists: persistenceService.curatedContent.audiobookSeries, apiService: spotifyAPIService))
-                                } else {
-                                    AudiobookSeriesSelectionView(artists: persistenceService.curatedContent.audiobookSeries)
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 40) {
+                            // Only show the Audiobook tile if content has been curated.
+                            if !persistenceService.curatedContent.audiobookSeries.isEmpty {
+                                // NavigationLink to the AudiobookGridView
+                                NavigationLink {
+                                    if persistenceService.curatedContent.audiobookSeries.count == 1 {
+                                        AudiobookGridView(viewModel: AudiobookGridViewModel(artists: persistenceService.curatedContent.audiobookSeries, apiService: spotifyAPIService))
+                                    } else {
+                                        AudiobookSeriesSelectionView(artists: persistenceService.curatedContent.audiobookSeries)
+                                    }
+                                } label: {
+                                    CategoryTile(
+                                    title: "Meine Hörbücher",
+                                        imageName: "book.closed.fill",
+                                        accentColor: .orange
+                                    )
                                 }
-                            } label: {
-                                CategoryTile(
-                                    title: "Audiobooks",
-                                    imageName: "book.closed.fill",
-                                    accentColor: .orange
-                                )
                             }
-                        }
 
-                        // Only show the Music tile if content has been curated.
-                        if !persistenceService.curatedContent.musicPlaylists.isEmpty {
-                            NavigationLink {
-                                if persistenceService.curatedContent.musicPlaylists.count == 1 {
-                                    MusicPlaylistView(viewModel: PlaylistViewModel(playlists: persistenceService.curatedContent.musicPlaylists, apiService: spotifyAPIService))
-                                } else {
-                                    MusicPlaylistSelectionView(playlists: persistenceService.curatedContent.musicPlaylists)
+                            // Only show the Music tile if content has been curated.
+                            if !persistenceService.curatedContent.musicPlaylists.isEmpty {
+                                NavigationLink {
+                                    if persistenceService.curatedContent.musicPlaylists.count == 1 {
+                                        MusicPlaylistView(viewModel: PlaylistViewModel(playlists: persistenceService.curatedContent.musicPlaylists, apiService: spotifyAPIService))
+                                    } else {
+                                        MusicPlaylistSelectionView(playlists: persistenceService.curatedContent.musicPlaylists)
+                                    }
+                                } label: {
+                                    CategoryTile(
+                                    title: "Meine Playlists",
+                                        imageName: "music.note.list",
+                                        accentColor: .purple
+                                    )
                                 }
-                            } label: {
-                                CategoryTile(
-                                    title: "Music",
-                                    imageName: "music.note.list",
-                                    accentColor: .purple
-                                )
                             }
-                        }
 
-                        // Only show the Podcast tile if content has been curated.
-                        if !persistenceService.curatedContent.podcastShows.isEmpty {
-                            NavigationLink {
-                                if persistenceService.curatedContent.podcastShows.count == 1 {
-                                    PodcastShowView(viewModel: PodcastViewModel(shows: persistenceService.curatedContent.podcastShows, apiService: spotifyAPIService))
-                                } else {
-                                    PodcastShowSelectionView(shows: persistenceService.curatedContent.podcastShows)
+                            // Only show the Podcast tile if content has been curated.
+                            if !persistenceService.curatedContent.podcastShows.isEmpty {
+                                NavigationLink {
+                                    if persistenceService.curatedContent.podcastShows.count == 1 {
+                                        PodcastShowView(viewModel: PodcastViewModel(shows: persistenceService.curatedContent.podcastShows, apiService: spotifyAPIService))
+                                    } else {
+                                        PodcastShowSelectionView(shows: persistenceService.curatedContent.podcastShows)
+                                    }
+                                } label: {
+                                    CategoryTile(
+                                    title: "Meine Videos",
+                                        imageName: "mic.fill",
+                                        accentColor: .green
+                                    )
                                 }
-                            } label: {
-                                CategoryTile(
-                                    title: "Podcasts",
-                                    imageName: "mic.fill",
-                                    accentColor: .green
-                                )
                             }
                         }
+                        .padding(40)
                     }
-                    .padding(40)
-                }
                     
                 } // End of else block
                 
@@ -117,6 +117,8 @@ struct HomeView: View {
         .sheet(isPresented: $viewModel.showAdminArea) {
             PINEntryView(viewModel: AdminViewModel(persistenceService: persistenceService, spotifyAPIService: spotifyAPIService))
                 .environmentObject(persistenceService)
+                .environmentObject(spotifyAPIService)
+                .environmentObject(playerViewModel)
         }
         // Present the NowPlayingView as a sheet when showNowPlayingSheet is true.
         .sheet(isPresented: $showNowPlayingSheet) {
@@ -182,8 +184,13 @@ struct HomeView_Previews: PreviewProvider {
         let mockContent = CuratedContent(audiobookSeries: [CuratedArtist(id: "1", name: "Pumuckl", imageURL: nil)], musicPlaylists: [CuratedPlaylist(id: "1", name: "Dance", imageURL: nil)], podcastShows: [])
         service.save(mockContent)
 
+        let sdkService = SpotifySDKService()
+
         return HomeView()
             .environmentObject(service)
+            .environmentObject(SpotifyAPIService())
+            .environmentObject(PlayerViewModel(sdkService: sdkService))
+            .environmentObject(sdkService)
             .previewInterfaceOrientation(.landscapeLeft)
     }
 }

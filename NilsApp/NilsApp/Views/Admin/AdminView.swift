@@ -14,30 +14,31 @@ struct AdminView: View {
     
     var body: some View {
         NavigationStack {
-            if !viewModel.isUnlocked {
-                PINEntryView(viewModel: viewModel) // PINEntryView will handle its own dismissal
-            } else {
-                List {
-                    spotifyAccountSection
-                    audiobooksSection
-                    musicSection
-                    podcastsSection
-                }
-                .navigationTitle("Admin Area")
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        // Lock button also dismisses the sheet
-                        Button("Lock") {
-                            viewModel.lock()
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(.red)
+            // --- DEVELOPMENT MODE: BYPASS PIN ENTRY ---
+            // if !viewModel.isUnlocked {
+            //     PINEntryView(viewModel: viewModel) // PINEntryView will handle its own dismissal
+            // } else {
+            List {
+                spotifyAccountSection
+                audiobooksSection
+                musicSection
+                podcastsSection
+            }
+            .navigationTitle("Admin Area")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    // Close button dismisses the sheet directly during development
+                    Button("Close / Lock") {
+                        dismiss()
                     }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
                 }
-                .sheet(isPresented: $showingSearchSheet) {
-                    AdminSearchView(category: searchCategory)
-                        .environmentObject(viewModel)
-                }
+            }
+            .sheet(isPresented: $showingSearchSheet) {
+                AdminSearchView(category: searchCategory)
+                    .environmentObject(viewModel)
+            // }
             }
         } // End of NavigationStack
     }
@@ -65,7 +66,7 @@ struct AdminView: View {
     }
     
     private var audiobooksSection: some View {
-        Section(header: Text("Audiobook Series")) {
+        Section(header: Text("Meine Hörbücher")) {
             ForEach(persistenceService.curatedContent.audiobookSeries) { artist in
                 Text(artist.name)
             }
@@ -81,7 +82,7 @@ struct AdminView: View {
     }
     
     private var musicSection: some View {
-        Section(header: Text("Music Playlists")) {
+        Section(header: Text("Meine Playlists")) {
             ForEach(persistenceService.curatedContent.musicPlaylists) { playlist in
                 Text(playlist.name)
             }
@@ -97,7 +98,7 @@ struct AdminView: View {
     }
     
     private var podcastsSection: some View {
-        Section(header: Text("Podcasts")) {
+        Section(header: Text("Meine Videos")) {
             ForEach(persistenceService.curatedContent.podcastShows) { show in
                 Text(show.name)
             }

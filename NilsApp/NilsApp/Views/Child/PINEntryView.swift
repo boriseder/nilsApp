@@ -8,6 +8,10 @@ struct PINEntryView: View {
     @State private var enteredPIN: String = ""
     
     var body: some View {
+        // --- DEVELOPMENT MODE: BYPASS PIN ENTRY ---
+        AdminView(viewModel: viewModel)
+            .environmentObject(viewModel)
+        /*
         VStack(spacing: 32) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 64))
@@ -37,12 +41,12 @@ struct PINEntryView: View {
                     .font(.title)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 250)
-                .onChange(of: enteredPIN) {
-                        // Clear error state as soon as the user starts typing again
-                        if viewModel.pinError {
-                            viewModel.pinError = false
-                        }
+                .onChange(of: enteredPIN) { _ in
+                    // Clear error state as soon as the user starts typing again
+                    if viewModel.pinError {
+                        viewModel.pinError = false
                     }
+                }
                 
                 if viewModel.pinError {
                     Text("Incorrect PIN. Please try again.")
@@ -77,6 +81,7 @@ struct PINEntryView: View {
             viewModel.pinError = false
             viewModel.lock() // Ensure it's locked when presented
         }
+        */
     }
     
     private func submitPIN() {
