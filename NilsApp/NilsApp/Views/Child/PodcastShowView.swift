@@ -14,8 +14,11 @@ struct PodcastShowView: View {
     
     var body: some View {
         ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+            LinearGradient(
+                colors: [.cyan.opacity(0.2), .mint.opacity(0.2)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ).ignoresSafeArea()
             
             if viewModel.isLoading && viewModel.episodes.isEmpty {
                 ProgressView("Loading episodes...")
@@ -32,6 +35,7 @@ struct PodcastShowView: View {
                     }
                 }
                 .listStyle(.plain) // Use plain list style for a cleaner look
+                .scrollContentBackground(.hidden) // Let the gradient show through
             }
         }
         .navigationTitle(viewModel.shows.count == 1 ? viewModel.shows.first?.name ?? "Meine Videos" : "Meine Videos")

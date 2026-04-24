@@ -14,8 +14,11 @@ struct MusicPlaylistView: View {
     
     var body: some View {
         ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+            LinearGradient(
+                colors: [.cyan.opacity(0.2), .mint.opacity(0.2)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ).ignoresSafeArea()
             
             if viewModel.isLoading && viewModel.tracks.isEmpty {
                 ProgressView("Loading music...")
@@ -32,6 +35,7 @@ struct MusicPlaylistView: View {
                     }
                 }
                 .listStyle(.plain) // Use plain list style for a cleaner look
+                .scrollContentBackground(.hidden) // Let the gradient show through
             }
         }
         .navigationTitle(viewModel.playlists.count == 1 ? viewModel.playlists.first?.name ?? "Meine Playlists" : "Meine Playlists")

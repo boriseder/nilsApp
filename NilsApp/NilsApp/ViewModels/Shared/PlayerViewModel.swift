@@ -49,6 +49,16 @@ final class PlayerViewModel: ObservableObject {
             .assign(to: &$trackImageURL)
         sdkService.$trackDuration
             .assign(to: &$trackDuration)
+            
+        // Automatically save playback progress every 5 seconds to ensure we don't lose
+        // the child's position if the app is backgrounded or killed during long-form playback.
+        sdkService.$currentProgress
+            .throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)
+            .sink { [weak self] progress in
+                guard let self = self, self.isPlaying, progress > 0 else { return }
+                self.saveCurrentProgress()
+            }
+            .store(in: &cancellables)
     }
 
 
@@ -62,10 +72,9 @@ final class PlayerViewModel: ObservableObject {
             let savedProgress = UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
             if savedProgress > 0 {
                 logger.info("Found local playback cache for \(uri, privacy: .public) at \(savedProgress)s. Playing and seeking.")
-                // Command SDK to play, then immediately seek to the saved progress.
-                // The SpotifySDKService's play method will handle the actual SDK call.
-                sdkService.play(uri: uri)
-                sdkService.seek(to: savedProgress)
+                // Command SDK to play, passing the saved position so the service
+                // can safely execute the seek once the track actually loads via IPC.
+                sdkService.play(uri: uri, fromPosition: savedProgress)
             } else {
                 sdkService.play(uri: uri)
             }

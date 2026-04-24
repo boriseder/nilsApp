@@ -32,6 +32,8 @@ struct NilsAppApp: App {
     // MARK: - Shared ViewModels
     @StateObject private var playerViewModel: PlayerViewModel
     
+    @State private var showSplash = true
+    
     init() {
         let sdkService = SpotifySDKService()
         _spotifySDKService = StateObject(wrappedValue: sdkService)
@@ -42,18 +44,32 @@ struct NilsAppApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView()
-                .environmentObject(persistenceService)
-                .environmentObject(spotifyAPIService)
-                .environmentObject(spotifySDKService)
-                .environmentObject(playerViewModel)
-            // Handle incoming URLs, specifically for Spotify OAuth redirects.
-            .onOpenURL { url in
-                self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
-                // Check if the URL is a Spotify redirect URI.
-                // The SpotifyAPIService will handle the actual token exchange.
-                if url.scheme == Constants.spotifyRedirectURI.scheme {
-                    Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
+            ZStack {
+                if showSplash {
+                    SplashView()
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                                withAnimation(.easeInOut(duration: 0.5)) {
+                                    showSplash = false
+                                }
+                            }
+                        }
+                } else {
+                    HomeView()
+                        .environmentObject(persistenceService)
+                        .environmentObject(spotifyAPIService)
+                        .environmentObject(spotifySDKService)
+                        .environmentObject(playerViewModel)
+                        .transition(.opacity)
+                        // Handle incoming URLs, specifically for Spotify OAuth redirects.
+                        .onOpenURL { url in
+                            self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
+                            // Check if the URL is a Spotify redirect URI.
+                            // The SpotifyAPIService will handle the actual token exchange.
+                            if url.scheme == Constants.spotifyRedirectURI.scheme {
+                                Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
+                            }
+                        }
                 }
             }
         }
@@ -62,9 +78,13 @@ struct NilsAppApp: App {
             case .active:
                 // Reconnect to the Spotify App Remote SDK when coming to the foreground
                 spotifySDKService.connect()
-            case .background, .inactive: // Disconnect when inactive or backgrounded.
-                // Disconnect to clean up resources when backgrounded
+            case .background:
+                // Disconnect to clean up resources when fully backgrounded
                 spotifySDKService.disconnect()
+            case .inactive:
+                // Do nothing. Disconnecting on inactive (e.g., pulling down Control Center) 
+                // drops the connection prematurely and interrupts the child's experience.
+                break
             default:
                 break
             }

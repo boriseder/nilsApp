@@ -13,14 +13,18 @@ struct PodcastShowSelectionView: View {
     @EnvironmentObject private var spotifyAPIService: SpotifyAPIService
 
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 32)
+        GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 40)
     ]
 
     var body: some View {
         ZStack {
-            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+            LinearGradient(
+                colors: [.cyan.opacity(0.2), .mint.opacity(0.2)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ).ignoresSafeArea()
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 32) {
+                LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(shows) { show in
                         NavigationLink {
                             PodcastShowView(viewModel: PodcastViewModel(shows: [show], apiService: spotifyAPIService))
@@ -35,7 +39,7 @@ struct PodcastShowSelectionView: View {
                         .buttonStyle(.plain)
                     }
                 }
-                .padding(32)
+                .padding(40)
             }
         }
         .navigationTitle("Meine Videos")

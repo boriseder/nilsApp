@@ -20,10 +20,10 @@ struct ItemTile: View {
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-                    .cornerRadius(24)
+                    .cornerRadius(32)
             } placeholder: {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 24)
+                    RoundedRectangle(cornerRadius: 32)
                         .fill(accentColor.opacity(0.3))
                         .aspectRatio(1, contentMode: .fit)
                     Image(systemName: placeholderIcon)
@@ -31,7 +31,7 @@ struct ItemTile: View {
                         .foregroundColor(accentColor)
                 }
             }
-            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 6)
 
             Text(title)
                 .font(.title2)

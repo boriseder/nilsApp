@@ -113,6 +113,8 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // MARK: - Internal (accessed by shim)
 
     internal let logger = Logger(subsystem: "com.nilsapp", category: "SpotifySDKService")
+    internal var pendingSeekURI: String?
+    internal var pendingSeekPosition: TimeInterval?
 
     // MARK: - Private
 
@@ -157,13 +159,23 @@ final class SpotifySDKService: NSObject, ObservableObject {
 
     // MARK: - Playback Controls
 
-    func play(uri: String) {
+    func play(uri: String, fromPosition position: TimeInterval? = nil) {
         guard isConnected else {
             logger.warning("Not connected — reconnecting before play.")
             connect()
             return
         }
-        logger.info("Playing URI: \(uri, privacy: .public)")
+        
+        if let position = position, position > 0 {
+            logger.info("Playing URI: \(uri, privacy: .public) with pending seek to \(position)s")
+            pendingSeekURI = uri
+            pendingSeekPosition = position
+        } else {
+            logger.info("Playing URI: \(uri, privacy: .public)")
+            pendingSeekURI = nil
+            pendingSeekPosition = nil
+        }
+        
         appRemote?.playerAPI?.play(uri)
     }
 

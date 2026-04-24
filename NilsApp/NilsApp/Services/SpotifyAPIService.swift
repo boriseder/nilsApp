@@ -446,8 +446,9 @@ final class SpotifyAPIService: ObservableObject {
             let cleanShowId = showId.trimmingCharacters(in: .whitespacesAndNewlines)
             logger.info("Fetching episodes for show: \(cleanShowId, privacy: .public)")
 
+            var showEpisodes: [SpotifyEpisode] = []
             var offset = 0
-            let limit = 50 // Increased limit to max allowed
+            let limit = 10 // Fetch slightly more per page in case some are explicit and get filtered
 
             while true {
                 let token = try await getValidToken()
@@ -529,15 +530,20 @@ final class SpotifyAPIService: ObservableObject {
                             releaseDate: ep.release_date?.convertedToDate()
                         )
                     }
-                    allEpisodes.append(contentsOf: pageEpisodes)
 
-                    if decoded.next == nil || items.isEmpty || items.count < limit { break }
+                    showEpisodes.append(contentsOf: pageEpisodes)
+
+                    // Stop fetching if we reached the end, or if we have at least 3 valid episodes
+                    if decoded.next == nil || items.isEmpty || showEpisodes.count >= 3 { break }
                     offset += limit
                 } catch {
                     logger.error("Decoding error for podcast episodes: \(error.localizedDescription)")
                     throw error
                 }
             }
+
+            // Append exactly up to 3 episodes for this specific show
+            allEpisodes.append(contentsOf: showEpisodes.prefix(3))
         }
 
         logger.info("Successfully fetched \(allEpisodes.count) episodes for shows.")
@@ -751,6 +757,7 @@ final class SpotifyAPIService: ObservableObject {
         case notAuthorized
         case httpError(statusCode: Int, message: String)
         case rateLimited(retryAfter: Int)
+        case noNetwork
         
         var errorDescription: String? {
             switch self {
@@ -762,6 +769,8 @@ final class SpotifyAPIService: ObservableObject {
                 } else {
                     return "Spotify needs a break. Please try again in \(retryAfter) seconds."
                 }
+            case .noNetwork: 
+                return "Oh no! The internet is hiding. Please ask a grown-up to check the Wi-Fi."
             }
         }
     }

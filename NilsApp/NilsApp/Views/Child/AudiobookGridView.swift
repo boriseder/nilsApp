@@ -8,13 +8,17 @@ struct AudiobookGridView: View {
     
     // Defines a flexible grid that adapts well to landscape orientations
     let columns = [
-        GridItem(.adaptive(minimum: 220, maximum: 280), spacing: 32)
+        GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 40)
     ]
     
     var body: some View {
         ZStack {
-            Color(uiColor: .systemGroupedBackground)
-                .ignoresSafeArea()
+            // A friendly, kid-appealing background gradient
+            LinearGradient(
+                colors: [.cyan.opacity(0.2), .mint.opacity(0.2)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ).ignoresSafeArea()
             
             if viewModel.isLoading && viewModel.albums.isEmpty {
                 ProgressView("Loading stories...")
@@ -24,12 +28,12 @@ struct AudiobookGridView: View {
                 errorStateView(message: error)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 32) {
+                    LazyVGrid(columns: columns, spacing: 40) {
                         ForEach(viewModel.albums) { album in
                             albumCard(for: album)
                         }
                     }
-                    .padding(32)
+                    .padding(40)
                 }
             }
         }
@@ -50,16 +54,16 @@ struct AudiobookGridView: View {
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .cornerRadius(24)
+                            .cornerRadius(32)
                     } placeholder: {
                         ProgressView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.orange.opacity(0.3))
-                            .cornerRadius(24)
+                            .cornerRadius(32)
                     }
                 } else {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 24)
+                        RoundedRectangle(cornerRadius: 32)
                             .fill(Color.orange.opacity(0.3))
                             .aspectRatio(1, contentMode: .fit)
                         Image(systemName: "book.closed.fill")
@@ -68,7 +72,7 @@ struct AudiobookGridView: View {
                     }
                 }
             }
-            .shadow(color: .black.opacity(0.1), radius: 8, x: 0, y: 4)
+            .shadow(color: .black.opacity(0.15), radius: 12, x: 0, y: 6)
             
             Text(album.name)
                 .font(.title2)

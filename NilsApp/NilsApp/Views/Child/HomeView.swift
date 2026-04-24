@@ -19,8 +19,12 @@ struct HomeView: View {
         // NavigationStack replaces NavigationView for modern iOS and avoids iPad split-view bugs.
         NavigationStack {
             ZStack {
-                // A subtle background color for the home screen
-                Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+                // A friendly, kid-appealing background gradient
+                LinearGradient(
+                    colors: [.cyan.opacity(0.2), .mint.opacity(0.2)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ).ignoresSafeArea()
 
                 if persistenceService.curatedContent.audiobookSeries.isEmpty &&
                    persistenceService.curatedContent.musicPlaylists.isEmpty &&
@@ -98,10 +102,7 @@ struct HomeView: View {
                     }
                 }
             }
-            // Navigation title and toolbar items are associated with the NavigationStack.
-                .navigationTitle("My Library")
-                .navigationBarTitleDisplayMode(.large)
-                .toolbar {
+            .toolbar {
                 // Admin button moved to the trailing edge of the navigation bar
                 // to avoid conflict with the mini-player at the bottom.
                 ToolbarItem(placement: .navigationBarTrailing) {
