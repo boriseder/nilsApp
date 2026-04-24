@@ -29,6 +29,7 @@ final class SpotifyDelegateShim: NSObject {
     init(service: SpotifySDKService) {
         self.service = service
     }
+    
 }
 
 extension SpotifyDelegateShim: SPTAppRemoteDelegate {
@@ -124,9 +125,14 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // never has to fight the module-wide @MainActor default.
     private var delegateShim: SpotifyDelegateShim?
 
+    // NEU: schwache Referenz auf APIService
+    private weak var apiService: SpotifyAPIService?
+
+    
     // MARK: - Init
 
-    override init() {
+    init(apiService: SpotifyAPIService) {
+        self.apiService = apiService
         super.init()
         setupAppRemote()
     }
@@ -149,7 +155,17 @@ final class SpotifySDKService: NSObject, ObservableObject {
     func connect() {
         logger.info("Attempting to connect to Spotify App...")
         hasPauseTimeoutOccurred = false
-        appRemote?.connect()
+        
+        Task {
+            if let token = try? await apiService?.getValidToken() {
+                appRemote?.connectionParameters.accessToken = token
+            }
+            await MainActor.run {
+                appRemote?.connect()
+            }
+        }
+
+        
     }
 
     func disconnect() {

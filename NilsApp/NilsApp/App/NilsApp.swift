@@ -35,7 +35,10 @@ struct NilsAppApp: App {
     @State private var showSplash = true
     
     init() {
-        let sdkService = SpotifySDKService()
+        let apiService = SpotifyAPIService()
+        let sdkService = SpotifySDKService(apiService: apiService)
+
+        _spotifyAPIService = StateObject(wrappedValue: apiService)
         _spotifySDKService = StateObject(wrappedValue: sdkService)
         _persistenceService = StateObject(wrappedValue: PersistenceService())
         _spotifyAPIService = StateObject(wrappedValue: SpotifyAPIService())

@@ -185,7 +185,8 @@ struct HomeView_Previews: PreviewProvider {
         let mockContent = CuratedContent(audiobookSeries: [CuratedArtist(id: "1", name: "Pumuckl", imageURL: nil)], musicPlaylists: [CuratedPlaylist(id: "1", name: "Dance", imageURL: nil)], podcastShows: [])
         service.save(mockContent)
 
-        let sdkService = SpotifySDKService()
+        let apiService = SpotifyAPIService()
+        let sdkService = SpotifySDKService(apiService: apiService)
 
         return HomeView()
             .environmentObject(service)
