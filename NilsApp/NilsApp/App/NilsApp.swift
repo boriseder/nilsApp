@@ -73,10 +73,14 @@ struct NilsAppApp: App {
                         // Handle incoming URLs, specifically for Spotify OAuth redirects.
                         .onOpenURL { url in
                             self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
-                            // Check if the URL is a Spotify redirect URI.
-                            // The SpotifyAPIService will handle the actual token exchange.
                             if url.scheme == Constants.spotifyRedirectURI.scheme {
-                                Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
+                                // Sowohl OAuth als auch App Remote Callbacks abfangen
+                                if url.absoluteString.contains("code=") {
+                                    // OAuth callback
+                                    Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
+                                }
+                                // App Remote verbindet sich automatisch nach dem Redirect
+                                self.spotifySDKService.connect()
                             }
                         }
                 }

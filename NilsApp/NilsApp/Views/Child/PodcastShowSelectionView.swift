@@ -11,6 +11,7 @@ import SwiftUI
 struct PodcastShowSelectionView: View {
     let shows: [CuratedShow]
     @EnvironmentObject private var spotifyAPIService: SpotifyAPIService
+    @EnvironmentObject private var persistenceService: PersistenceService
 
     private let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 40)
@@ -27,7 +28,13 @@ struct PodcastShowSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(shows) { show in
                         NavigationLink {
-                            PodcastShowView(viewModel: PodcastViewModel(shows: [show], apiService: spotifyAPIService))
+                            PodcastShowView(
+                                viewModel: PodcastViewModel(
+                                    shows: [show],
+                                    apiService: spotifyAPIService,
+                                    persistenceService: persistenceService
+                                )
+                            )
                         } label: {
                             ItemTile(
                                 title: show.name,
@@ -45,3 +52,6 @@ struct PodcastShowSelectionView: View {
         .navigationTitle("Meine Videos")
     }
 }
+
+
+

@@ -11,6 +11,7 @@ import SwiftUI
 struct MusicPlaylistSelectionView: View {
     let playlists: [CuratedPlaylist]
     @EnvironmentObject private var spotifyAPIService: SpotifyAPIService
+    @EnvironmentObject private var persistenceService: PersistenceService
 
     private let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 40)
@@ -27,7 +28,11 @@ struct MusicPlaylistSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(playlists) { playlist in
                         NavigationLink {
-                            MusicPlaylistView(viewModel: PlaylistViewModel(playlists: [playlist], apiService: spotifyAPIService))
+                            MusicPlaylistView(viewModel: PlaylistViewModel(
+                                playlists: [playlist],
+                                apiService: spotifyAPIService,
+                                persistenceService: persistenceService
+                            ))
                         } label: {
                             ItemTile(
                                 title: playlist.name,

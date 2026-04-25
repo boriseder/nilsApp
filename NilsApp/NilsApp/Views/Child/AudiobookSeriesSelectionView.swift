@@ -11,6 +11,7 @@ import SwiftUI
 struct AudiobookSeriesSelectionView: View {
     let artists: [CuratedArtist]
     @EnvironmentObject private var spotifyAPIService: SpotifyAPIService
+    @EnvironmentObject private var persistenceService: PersistenceService
 
     private let columns: [GridItem] = [
         GridItem(.adaptive(minimum: 240, maximum: 320), spacing: 40)
@@ -27,7 +28,11 @@ struct AudiobookSeriesSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(artists) { artist in
                         NavigationLink {
-                            AudiobookGridView(viewModel: AudiobookGridViewModel(artists: [artist], apiService: spotifyAPIService))
+                            AudiobookGridView(viewModel: AudiobookGridViewModel(
+                                artists: [artist],
+                                apiService: spotifyAPIService,
+                                persistenceService: persistenceService
+                            ))
                         } label: {
                             ItemTile(
                                 title: artist.name,
@@ -36,7 +41,7 @@ struct AudiobookSeriesSelectionView: View {
                                 accentColor: .orange
                             )
                         }
-                        .buttonStyle(.plain) // Removes the default blue tint from the text
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(40)

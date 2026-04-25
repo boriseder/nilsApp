@@ -16,31 +16,41 @@ final class AudiobookGridViewModel: ObservableObject {
     @Published private(set) var albums: [SpotifyAlbum] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
-    
+
     let artists: [CuratedArtist]
     private let apiService: SpotifyAPIService
+    private let persistenceService: PersistenceService
     private let logger = Logger(subsystem: "com.nilsapp", category: "AudiobookGridViewModel")
-    
-    init(artists: [CuratedArtist], apiService: SpotifyAPIService) {
+
+    init(artists: [CuratedArtist], apiService: SpotifyAPIService, persistenceService: PersistenceService) {
         self.artists = artists
         self.apiService = apiService
+        self.persistenceService = persistenceService
     }
-    
-    /// Fetches all albums for the `artist` from the Spotify API.
-    func fetchAlbums() {
+
+    /// Fetches all albums for the artists — uses disk cache unless forceRefresh is true.
+    func fetchAlbums(forceRefresh: Bool = false) {
         guard !isLoading else { return }
-        
+
+        let artistIds = artists.map { $0.id }
+
+        // Cache prüfen — außer bei explizitem Pull-to-Refresh
+        if !forceRefresh, let cached = persistenceService.loadAlbums(for: artistIds) {
+            self.albums = cached
+            logger.info("Using cached albums — no API call needed.")
+            return
+        }
+
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching albums for \(self.artists.count) artists.")
-        
+        logger.info("Fetching albums for \(self.artists.count) artists from API.")
+
         Task {
             do {
-                // Extract all IDs from the array of artists
-                let artistIds = artists.map { $0.id }
-                let fetchedAlbums = try await apiService.fetchAudiobookAlbums(artistIds: artistIds)
-                self.albums = fetchedAlbums
-                self.logger.info("Successfully fetched \(fetchedAlbums.count) total albums.")
+                let fetched = try await apiService.fetchAudiobookAlbums(artistIds: artistIds)
+                persistenceService.saveAlbums(fetched, for: artistIds)
+                self.albums = fetched
+                self.logger.info("Successfully fetched \(fetched.count) total albums.")
             } catch {
                 self.errorMessage = "Failed to load stories: \(error.localizedDescription)"
                 self.logger.error("Failed to fetch audiobook albums: \(error.localizedDescription)")

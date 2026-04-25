@@ -129,6 +129,9 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // NEU: schwache Referenz auf APIService
     private weak var apiService: SpotifyAPIService?
 
+    // In SpotifySDKService — als private Property hinzufügen:
+    private var localNetworkBrowser: NWBrowser?
+
     
     // MARK: - Init
 
@@ -152,6 +155,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
         triggerLocalNetworkPrivacyAlert()
     }
 
+    
     // MARK: - Connection Lifecycle
 
     func connect() {
@@ -185,39 +189,63 @@ final class SpotifySDKService: NSObject, ObservableObject {
     }
     
     func triggerLocalNetworkPrivacyAlert() {
-        let host = NWEndpoint.Host("127.0.0.1")
-        let port = NWEndpoint.Port(integerLiteral: 9095)
-        let connection = NWConnection(host: host, port: port, using: .tcp)
-        
-        connection.stateUpdateHandler = { state in
-            // Dies triggert den iOS-Dialog beim ersten Mal
-            print("Network state update: \(state)")
+        // Ein NetServiceBrowser-Lookup auf _spotify-connect._tcp
+        // ist der einzige zuverlässige Weg, den iOS-Dialog zu triggern,
+        // weil iOS ihn an Bonjour/Multicast-Aktivität knüpft — nicht an TCP.
+        let browser = NWBrowser(
+            for: .bonjourWithTXTRecord(type: "_spotify-connect._tcp", domain: "local."),
+            using: .tcp
+        )
+        browser.stateUpdateHandler = { state in
+            // Nur zum Triggern des Dialogs — Ergebnis ist irrelevant
         }
-        connection.start(queue: .main)
+        browser.browseResultsChangedHandler = { _, _ in }
+        browser.start(queue: .main)
+        
+        // Nach 3 Sekunden stoppen — wir wollen nur den Dialog, keine dauernde Suche
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            browser.cancel()
+        }
     }
 
     // MARK: - Playback Controls
 
     func play(uri: String, fromPosition position: TimeInterval? = nil) {
         guard isConnected else {
-            logger.warning("Not connected — reconnecting before play.")
-            connect()
+            logger.warning("Not connected — using authorizeAndPlayURI.")
+            
+            // Speichere URI für nach der Verbindung
+            pendingSeekURI = uri
+            pendingSeekPosition = position
+            
+            Task {
+                do {
+                    guard let api = apiService else { return }
+                    let token = try await api.getValidToken()
+                    await MainActor.run {
+                        self.appRemote?.connectionParameters.accessToken = token
+                        // DAS ist der korrekte Spotify SDK Flow:
+                        self.appRemote?.authorizeAndPlayURI(uri)
+                    }
+                } catch {
+                    logger.error("Token error: \(error.localizedDescription)")
+                }
+            }
             return
         }
         
+        // Bereits verbunden — normal abspielen
         if let position = position, position > 0 {
-            logger.info("Playing URI: \(uri, privacy: .public) with pending seek to \(position)s")
             pendingSeekURI = uri
             pendingSeekPosition = position
         } else {
-            logger.info("Playing URI: \(uri, privacy: .public)")
             pendingSeekURI = nil
             pendingSeekPosition = nil
         }
         
+        logger.info("Playing URI: \(uri, privacy: .public)")
         appRemote?.playerAPI?.play(uri)
     }
-
     func pause() {
         logger.info("Pausing playback.")
         appRemote?.playerAPI?.pause()

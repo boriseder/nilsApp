@@ -11,7 +11,8 @@ import SwiftUI
 struct PodcastShowView: View {
     @StateObject var viewModel: PodcastViewModel
     @EnvironmentObject var playerViewModel: PlayerViewModel
-    
+    @EnvironmentObject private var persistenceService: PersistenceService
+
     var body: some View {
         ZStack {
             LinearGradient(

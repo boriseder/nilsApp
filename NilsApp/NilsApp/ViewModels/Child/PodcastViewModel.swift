@@ -16,30 +16,40 @@ final class PodcastViewModel: ObservableObject {
     @Published private(set) var episodes: [SpotifyEpisode] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
-    
+
     let shows: [CuratedShow]
     private let apiService: SpotifyAPIService
+    private let persistenceService: PersistenceService
     private let logger = Logger(subsystem: "com.nilsapp", category: "PodcastViewModel")
-    
-    init(shows: [CuratedShow], apiService: SpotifyAPIService) {
+
+    init(shows: [CuratedShow], apiService: SpotifyAPIService, persistenceService: PersistenceService) {
         self.shows = shows
         self.apiService = apiService
+        self.persistenceService = persistenceService
     }
-    
-    /// Fetches all episodes for the `shows` from the Spotify API.
-    func fetchEpisodes() {
+
+    /// Fetches all episodes — uses disk cache unless forceRefresh is true.
+    func fetchEpisodes(forceRefresh: Bool = false) {
         guard !isLoading else { return }
-        
+
+        let showIds = shows.map { $0.id }
+
+        if !forceRefresh, let cached = persistenceService.loadEpisodes(for: showIds) {
+            self.episodes = cached
+            logger.info("Using cached episodes — no API call needed.")
+            return
+        }
+
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching episodes for \(self.shows.count) shows.")
-        
+        logger.info("Fetching episodes for \(self.shows.count) shows from API.")
+
         Task {
             do {
-                let showIds = shows.map { $0.id }
-                let fetchedEpisodes = try await apiService.fetchPodcastEpisodes(showIds: showIds)
-                self.episodes = fetchedEpisodes
-                self.logger.info("Successfully fetched \(fetchedEpisodes.count) total episodes.")
+                let fetched = try await apiService.fetchPodcastEpisodes(showIds: showIds)
+                persistenceService.saveEpisodes(fetched, for: showIds)
+                self.episodes = fetched
+                self.logger.info("Successfully fetched \(fetched.count) total episodes.")
             } catch {
                 self.errorMessage = "Failed to load episodes: \(error.localizedDescription)"
                 self.logger.error("Failed to fetch podcast episodes: \(error.localizedDescription)")

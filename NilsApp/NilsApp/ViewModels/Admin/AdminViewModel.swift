@@ -212,6 +212,7 @@ final class AdminViewModel: ObservableObject {
         if !curatedAudiobookSeries.contains(where: { $0.id == artist.id }) {
             curatedAudiobookSeries.append(artist)
             saveCuratedContent()
+            persistenceService.clearAlbumsCache() // Cache invalidieren
         }
     }
     
