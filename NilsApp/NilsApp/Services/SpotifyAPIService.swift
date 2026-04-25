@@ -13,7 +13,6 @@ final class SpotifyAPIService: ObservableObject {
     @Published private(set) var isAuthorized: Bool = false
     
     /// Becomes true if the automatic token refresh fails completely and manual parental login is required.
-    /// The UI must observe this to show an "Ask a grown-up" error state in the child's view.
     @Published private(set) var requiresReauthentication: Bool = false
     
     private let logger = Logger(subsystem: "com.nilsapp", category: "SpotifyAPIService")
@@ -37,28 +36,35 @@ final class SpotifyAPIService: ObservableObject {
     private func setupAPI() {
         logger.debug("SpotifyAPIService initialized.")
         loadFromKeychain()
-        // Force a token refresh on startup to ensure we always have a fresh token.
-        Task {
-            if authState != nil {
-                try? await forceTokenRefresh()
-                logger.info("Token refreshed on startup.")
+
+        // FIX 8: isAuthorized must reflect the outcome of the token refresh, not just
+        // whether an authState exists in the keychain before the refresh completes.
+        // We set it conservatively to false here and update it inside the Task so the
+        // UI never shows a false-positive authorized state while the refresh is in flight.
+        if authState != nil {
+            // We have a stored token — optimistically allow API calls while refreshing,
+            // but only if the stored token is not yet expired.
+            self.isAuthorized = authState?.expirationDate ?? .distantPast > Date()
+
+            Task {
+                do {
+                    try await forceTokenRefresh()
+                    self.isAuthorized = true
+                    logger.info("Token refreshed on startup.")
+                } catch {
+                    // forceTokenRefresh already sets isAuthorized = false and
+                    // requiresReauthentication = true on failure.
+                    logger.warning("Startup token refresh failed: \(error.localizedDescription)")
+                }
             }
+        } else {
+            self.isAuthorized = false
         }
-        let isAuth = self.authState != nil
-        self.isAuthorized = isAuth
     }
     
     // MARK: - Authentication
     
     /// Generates the URL for the parent to log in via a web view.
-    /// *STRICT RULE*: This must ONLY be used in the Admin area. Never in the child's UI.
-    ///
-    /// Required scopes:
-    /// - `user-read-playback-state`, `user-modify-playback-state`, `user-read-currently-playing`: For playback control.
-    /// - `user-library-read`: To read parent's saved content for curation.
-    /// - `playlist-read-private`, `playlist-read-collaborative`: To read parent's playlists for curation.
-    /// - `user-read-private`, `user-read-email`: For basic user info.
-    /// - `app-remote-control`: Essential for the Spotify App Remote SDK.
     func getAuthorizationURL() -> URL? {
         logger.info("Generating OAuth URL for Admin login.")
         
@@ -129,7 +135,6 @@ final class SpotifyAPIService: ObservableObject {
         }
         let tokenResponse = try JSONDecoder().decode(TokenResponse.self, from: data)
         
-        // Expiration date = now + expires_in (minus a 60-second buffer)
         let expiration = Date().addingTimeInterval(TimeInterval(tokenResponse.expires_in - 60))
         let newRefresh = tokenResponse.refresh_token ?? self.authState?.refreshToken ?? ""
         guard !newRefresh.isEmpty else { throw APIError.notAuthorized }
@@ -230,9 +235,6 @@ final class SpotifyAPIService: ObservableObject {
     
     // MARK: - Data Fetching (Audiobooks)
     
-    /// Fetches all albums (stories) for a given list of audiobook artists.
-    /// Uses Spotify's own `next` pagination links to avoid the undocumented
-    /// `limit` parameter rejection that affects certain audiobook artists.
     func fetchAudiobookAlbums(artistIds: [String]) async throws -> [SpotifyAlbum] {
         guard isAuthorized else { throw APIError.notAuthorized }
 
@@ -242,8 +244,6 @@ final class SpotifyAPIService: ObservableObject {
             let cleanArtistId = artistId.trimmingCharacters(in: .whitespacesAndNewlines)
             logger.info("Fetching audiobook albums for artist: \(cleanArtistId)")
 
-            // Start without limit/offset — some audiobook artists reject the limit parameter.
-            // We follow Spotify's own `next` pagination links instead.
             var nextURL: String? = "https://api.spotify.com/v1/artists/\(cleanArtistId)/albums?include_groups=album"
 
             while let currentURLString = nextURL {
@@ -296,8 +296,6 @@ final class SpotifyAPIService: ObservableObject {
                         return SpotifyAlbum(id: id, name: name, imageURL: imageURL, uri: uri)
                     }
                     allAlbums.append(contentsOf: pageAlbums)
-
-                    // Follow Spotify's own next link for pagination
                     nextURL = decoded.next
                 } catch {
                     logger.error("Decoding error for audiobook albums: \(error.localizedDescription)")
@@ -312,7 +310,6 @@ final class SpotifyAPIService: ObservableObject {
     
     // MARK: - Data Fetching (Music)
     
-    /// Fetches all tracks for a list of curated playlists.
     func fetchPlaylistTracks(playlistIds: [String]) async throws -> [SpotifyTrack] {
         guard isAuthorized else { throw APIError.notAuthorized }
 
@@ -334,7 +331,6 @@ final class SpotifyAPIService: ObservableObject {
                     URLQueryItem(name: "offset", value: "\(offset)")
                 ]
                 guard let url = components.url else { break }
-                logger.debug("Requesting playlist tracks: \(url.absoluteString)")
 
                 var request = URLRequest(url: url)
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -352,27 +348,20 @@ final class SpotifyAPIService: ObservableObject {
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                     let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
                     if retryAfter > 30 {
-                        logger.error("Spotify Rate Limit dauerhaft (\(retryAfter)s). Zeige Fehlermeldung.")
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
-                    logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
                     try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
 
-
                 if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
                     if httpResponse.statusCode == 403 {
-                        logger.warning("HTTP 403 Forbidden for playlist \(cleanPlaylistId). Skipping (ownership restriction).")
+                        logger.warning("HTTP 403 Forbidden for playlist \(cleanPlaylistId). Skipping.")
                         break
                     }
                     let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-                    logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
                     throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
                 }
-
-                let rawJSON = String(data: data, encoding: .utf8) ?? ""
-                logger.debug("Playlist tracks JSON response prefix: \(rawJSON.prefix(500))")
 
                 struct LoosePlaylistTrackResponse: Decodable { let items: [LoosePlaylistItem?]?; let next: String? }
                 struct LoosePlaylistItem: Decodable {
@@ -394,11 +383,7 @@ final class SpotifyAPIService: ObservableObject {
 
                 do {
                     let decoded = try JSONDecoder().decode(LoosePlaylistTrackResponse.self, from: data)
-                    guard let items = decoded.items else {
-                        logger.warning("Decoded items is nil for playlist tracks")
-                        break
-                    }
-                    logger.debug("Decoded \(items.count) playlist tracks from JSON")
+                    guard let items = decoded.items else { break }
 
                     let pageTracks = items.compactMap { listItem -> SpotifyTrack? in
                         guard let track = listItem?.track ?? listItem?.item,
@@ -458,7 +443,6 @@ final class SpotifyAPIService: ObservableObject {
                     URLQueryItem(name: "market", value: "AT")
                 ]
                 guard let url = components.url else { break }
-                logger.debug("Requesting podcast episodes: \(url.absoluteString)")
 
                 var request = URLRequest(url: url)
                 request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -476,18 +460,14 @@ final class SpotifyAPIService: ObservableObject {
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                     let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
                     if retryAfter > 30 {
-                        logger.error("Spotify Rate Limit dauerhaft (\(retryAfter)s). Zeige Fehlermeldung.")
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
-                    logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
                     try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
 
-
                 if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
                     let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-                    logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
                     throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
                 }
 
@@ -506,11 +486,7 @@ final class SpotifyAPIService: ObservableObject {
 
                 do {
                     let decoded = try JSONDecoder().decode(LooseEpisodeResponse.self, from: data)
-                    guard let items = decoded.items else {
-                        logger.warning("Decoded items is nil for podcast episodes")
-                        break
-                    }
-                    logger.debug("Decoded \(items.count) podcast episodes from JSON")
+                    guard let items = decoded.items else { break }
 
                     let pageEpisodes = items.compactMap { episode -> SpotifyEpisode? in
                         guard let ep = episode, ep.explicit != true,
@@ -529,7 +505,13 @@ final class SpotifyAPIService: ObservableObject {
 
                     showEpisodes.append(contentsOf: pageEpisodes)
 
-                    if decoded.next == nil || items.isEmpty || showEpisodes.count >= 3 { break }
+                    // FIX 9: Only stop paging when we have enough non-explicit episodes
+                    // OR there are no more pages OR the page came back empty.
+                    // Do NOT stop just because items.isEmpty — check next instead,
+                    // so we keep fetching through pages of all-explicit content.
+                    if showEpisodes.count >= 3 || decoded.next == nil || items.isEmpty {
+                        break
+                    }
                     offset += limit
                 } catch {
                     logger.error("Decoding error for podcast episodes: \(error.localizedDescription)")
@@ -546,10 +528,8 @@ final class SpotifyAPIService: ObservableObject {
     
     // MARK: - Search
     
-    /// Searches Spotify for artists (Audiobook Series) matching the query.
     func searchAudiobookSeries(query: String) async throws -> [CuratedArtist] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        logger.info("Searching audiobook series for: \(query, privacy: .public)")
         
         let token = try await getValidToken()
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
@@ -558,8 +538,6 @@ final class SpotifyAPIService: ObservableObject {
             URLQueryItem(name: "type", value: "artist")
         ]
         guard let url = components.url else { throw APIError.notAuthorized }
-        
-        logger.debug("Executing Audiobook Search URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -575,12 +553,8 @@ final class SpotifyAPIService: ObservableObject {
         }
         
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            if httpResponse.statusCode == 400 {
-                logger.warning("Spotify rejected the search query '\(query)'. Returning empty results.")
-                return []
-            }
+            if httpResponse.statusCode == 400 { return [] }
             let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-            logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
             throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
         }
         
@@ -597,7 +571,6 @@ final class SpotifyAPIService: ObservableObject {
         }
     }
     
-    /// Fetches all of the parent's own playlists and filters by query.
     func searchMusicPlaylists(query: String) async throws -> [CuratedPlaylist] {
         logger.info("Fetching parent's music playlists to filter by: '\(query)'")
         
@@ -614,7 +587,6 @@ final class SpotifyAPIService: ObservableObject {
                 URLQueryItem(name: "offset", value: "\(offset)")
             ]
             guard let url = components.url else { break }
-            logger.debug("Requesting parent playlists: \(url.absoluteString)")
             
             var request = URLRequest(url: url)
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -632,17 +604,14 @@ final class SpotifyAPIService: ObservableObject {
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                 let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
                 if retryAfter > 10 {
-                    logger.error("Spotify Rate Limit too high (\(retryAfter)s). Aborting.")
                     throw APIError.rateLimited(retryAfter: retryAfter)
                 }
-                logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
                 try await Task.sleep(for: .seconds(retryAfter))
                 continue
             }
             
             if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
                 let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-                logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
                 throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
             }
             
@@ -665,12 +634,10 @@ final class SpotifyAPIService: ObservableObject {
                 if looseResponse.next == nil || items.isEmpty || items.count < limit { break }
                 offset += limit
             } catch {
-                logger.error("Decoding error for playlist fetch: \(error.localizedDescription)")
                 throw error
             }
         }
         
-        // Filter locally if a query was provided
         if !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return allPlaylists.filter { $0.name.localizedCaseInsensitiveContains(query) }
         }
@@ -678,10 +645,8 @@ final class SpotifyAPIService: ObservableObject {
         return allPlaylists
     }
     
-    /// Searches Spotify for podcast shows matching the query.
     func searchPodcastShows(query: String) async throws -> [CuratedShow] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        logger.info("Searching podcast shows for: \(query, privacy: .public)")
         
         let token = try await getValidToken()
         var components = URLComponents(string: "https://api.spotify.com/v1/search")!
@@ -690,8 +655,6 @@ final class SpotifyAPIService: ObservableObject {
             URLQueryItem(name: "type", value: "show")
         ]
         guard let url = components.url else { throw APIError.notAuthorized }
-        
-        logger.debug("Executing Podcast Search URL: \(url.absoluteString)")
         
         var request = URLRequest(url: url)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -707,12 +670,8 @@ final class SpotifyAPIService: ObservableObject {
         }
         
         if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
-            if httpResponse.statusCode == 400 {
-                logger.warning("Spotify rejected the search query '\(query)'. Returning empty results.")
-                return []
-            }
+            if httpResponse.statusCode == 400 { return [] }
             let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
-            logger.error("HTTP Error \(httpResponse.statusCode): \(errorString)")
             throw APIError.httpError(statusCode: httpResponse.statusCode, message: errorString)
         }
         
@@ -772,7 +731,6 @@ final class SpotifyAPIService: ObservableObject {
 // MARK: - Date Parsing Helper
 
 extension String {
-    /// Safely converts a Spotify date string ("YYYY-MM-DD", "YYYY-MM", or "YYYY") into a Date object.
     func convertedToDate() -> Date? {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"

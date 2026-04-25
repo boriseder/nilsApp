@@ -20,58 +20,69 @@ struct HomeView: View {
     ]
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                // Warmer, ruhiger Hintergrund
-                Color(red: 0.97, green: 0.96, blue: 0.93)
-                    .ignoresSafeArea()
+        // ─────────────────────────────────────────────────────────────────────
+        // IMPORTANT: The MiniPlayer must live OUTSIDE the NavigationStack.
+        // If placed inside it, navigating to a child view (AudiobookGridView,
+        // MusicPlaylistView, PodcastShowView) pushes HomeView off screen and the
+        // bar disappears. Wrapping in a root ZStack with .ignoresSafeArea on the
+        // NavigationStack ensures the bar floats over every navigation level.
+        // ─────────────────────────────────────────────────────────────────────
+        ZStack(alignment: .bottom) {
 
-                // Dekorative Kreise im Hintergrund
-                backgroundDecoration
+            // ── Navigation stack (full screen) ───────────────────────────────
+            NavigationStack {
+                ZStack {
+                    Color(red: 0.97, green: 0.96, blue: 0.93)
+                        .ignoresSafeArea()
 
-                if persistenceService.curatedContent.audiobookSeries.isEmpty &&
-                   persistenceService.curatedContent.musicPlaylists.isEmpty &&
-                   persistenceService.curatedContent.podcastShows.isEmpty {
-                    emptyCuratedContentState
-                } else {
-                    ScrollView(showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 0) {
-                            // Header
-                            header
+                    backgroundDecoration
+
+                    if persistenceService.curatedContent.audiobookSeries.isEmpty &&
+                       persistenceService.curatedContent.musicPlaylists.isEmpty &&
+                       persistenceService.curatedContent.podcastShows.isEmpty {
+                        emptyCuratedContentState
+                    } else {
+                        ScrollView(showsIndicators: false) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                header
+                                    .padding(.horizontal, 40)
+                                    .padding(.top, 20)
+                                    .padding(.bottom, 32)
+
+                                LazyVGrid(columns: columns, spacing: 24) {
+                                    audiobooksLink
+                                    musicLink
+                                    podcastsLink
+                                }
                                 .padding(.horizontal, 40)
-                                .padding(.top, 20)
-                                .padding(.bottom, 32)
-
-                            // Category Grid
-                            LazyVGrid(columns: columns, spacing: 24) {
-                                audiobooksLink
-                                musicLink
-                                podcastsLink
+                                // Bottom padding accounts for the floating MiniPlayer
+                                // height (~100 pts) plus a comfortable gap.
+                                .padding(.bottom, playerViewModel.currentTrackURI != nil ? 120 : 40)
                             }
-                            .padding(.horizontal, 40)
-                            .padding(.bottom, playerViewModel.currentTrackURI != nil ? 120 : 40)
                         }
                     }
                 }
-
-                // MiniPlayer
-                if playerViewModel.currentTrackURI != nil {
-                    VStack {
-                        Spacer()
-                        MiniPlayerBar(showNowPlayingSheet: $showNowPlayingSheet)
-                            .environmentObject(playerViewModel)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        adminButton
                     }
-                    .ignoresSafeArea(edges: .bottom)
                 }
+                .navigationBarTitleDisplayMode(.inline)
             }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    adminButton
-                }
+            // Allow the MiniPlayer overlay to sit below the safe area of the nav stack
+            .ignoresSafeArea(edges: .bottom)
+
+            // ── Floating MiniPlayer overlay ───────────────────────────────────
+            // Rendered at this ZStack level so it persists across every navigation
+            // push inside the NavigationStack above.
+            if playerViewModel.currentTrackURI != nil {
+                MiniPlayerBar(showNowPlayingSheet: $showNowPlayingSheet)
+                    .environmentObject(playerViewModel)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(100)
             }
-            .navigationBarTitleDisplayMode(.inline)
         }
+        .animation(.spring(response: 0.4, dampingFraction: 0.75), value: playerViewModel.currentTrackURI != nil)
         .onAppear {
             configureViewModels()
             withAnimation(.spring(response: 0.7, dampingFraction: 0.8).delay(0.1)) {
@@ -251,11 +262,9 @@ struct HomeView: View {
 
         var body: some View {
             ZStack(alignment: .bottomLeading) {
-                // Hintergrund
                 RoundedRectangle(cornerRadius: 28)
                     .fill(bgColor)
 
-                // Dekorativer Kreis rechts oben
                 Circle()
                     .fill(accentColor.opacity(0.15))
                     .frame(width: 160, height: 160)
@@ -266,7 +275,6 @@ struct HomeView: View {
                     .frame(width: 100, height: 100)
                     .offset(x: 80, y: -20)
 
-                // Icon rechts oben
                 VStack {
                     HStack {
                         Spacer()
@@ -285,7 +293,6 @@ struct HomeView: View {
                     Spacer()
                 }
 
-                // Text unten links
                 VStack(alignment: .leading, spacing: 6) {
                     Text(title)
                         .font(.system(size: 28, weight: .heavy, design: .rounded))
@@ -296,10 +303,7 @@ struct HomeView: View {
                         .foregroundColor(accentColor)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 4)
-                        .background(
-                            Capsule()
-                                .fill(accentColor.opacity(0.15))
-                        )
+                        .background(Capsule().fill(accentColor.opacity(0.15)))
                 }
                 .padding(.horizontal, 28)
                 .padding(.bottom, 28)

@@ -13,11 +13,11 @@ final class PlayerViewModel: ObservableObject {
     @Published private(set) var currentProgress: TimeInterval = 0
     @Published private(set) var trackName: String?
     @Published private(set) var artistName: String?
-    @Published private(set) var trackDuration: TimeInterval = 0 // Added trackDuration to PlayerViewModel
+    @Published private(set) var trackDuration: TimeInterval = 0
     @Published private(set) var trackImageURL: URL?
     @Published private(set) var isOpeningSpotify: Bool = false
 
-    /// Forwarded from the SDK Service. When true, the UI must show a "Tap to Resume" 
+    /// Forwarded from the SDK Service. When true, the UI must show a "Tap to Resume"
     /// button instead of standard playback controls to handle the ~30s timeout.
     @Published private(set) var hasPauseTimeoutOccurred: Bool = false
     
@@ -31,11 +31,9 @@ final class PlayerViewModel: ObservableObject {
     init(sdkService: SpotifySDKService) {
         self.sdkService = sdkService
         
-        // Observe the SDK timeout state so the UI can react immediately
         sdkService.$hasPauseTimeoutOccurred
             .assign(to: &$hasPauseTimeoutOccurred)
 
-        // Subscribe to SpotifySDKService's published properties for live player state updates
         sdkService.$currentTrackURI
             .assign(to: &$currentTrackURI)
         sdkService.$isPlaying
@@ -51,21 +49,31 @@ final class PlayerViewModel: ObservableObject {
         sdkService.$trackDuration
             .assign(to: &$trackDuration)
             
-        // Automatically save playback progress every 5 seconds to ensure we don't lose
-        // the child's position if the app is backgrounded or killed during long-form playback.
+        // Automatically save playback progress every 5 seconds while playing.
         sdkService.$currentProgress
             .throttle(for: .seconds(5), scheduler: RunLoop.main, latest: true)
             .sink { [weak self] progress in
-                // Erst nach 10 Sekunden speichern — verhindert dass beim nächsten
-                // Öffnen ans Ende eines kurzen Intros gesprungen wird.
+                // Only save after 10s to avoid capturing intros as resume positions.
                 guard let self = self, self.isPlaying, progress > 10.0 else { return }
                 self.saveCurrentProgress()
             }
             .store(in: &cancellables)
-        
+
+        // FIX 6: Save progress on pause using the position delivered by the SDK callback,
+        // not from currentProgress which may be up to 5 seconds stale (throttled above).
+        // We watch isPlaying transitions: true → false means the SDK confirmed the pause
+        // and currentProgress at that instant reflects the actual paused position.
+        sdkService.$isPlaying
+            .removeDuplicates()
+            .sink { [weak self] playing in
+                guard let self = self, !playing else { return }
+                // isPlaying just became false — save the SDK-confirmed position.
+                self.saveCurrentProgress()
+            }
+            .store(in: &cancellables)
+
         sdkService.$isOpeningSpotify
             .assign(to: &$isOpeningSpotify)
-
     }
 
 
@@ -73,17 +81,11 @@ final class PlayerViewModel: ObservableObject {
 
     /// Plays a given URI. If it's long-form content, it checks for a local position cache.
     func play(uri: String, isLongForm: Bool) {
-        // Verhindert doppelte Play-Calls für dieselbe URI während sie bereits spielt
         guard uri != currentTrackURI || !isPlaying else {
             logger.info("Ignoring duplicate play call for URI: \(uri, privacy: .public)")
             return
         }
 
-
-        // currentTrackURI NICHT hier setzen — kommt vom SDK via playerStateDidChange
-        // currentTrackURI = uri
-
-        
         if isLongForm {
             let savedProgress = UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
             if savedProgress > 0 {
@@ -99,7 +101,9 @@ final class PlayerViewModel: ObservableObject {
     
     func pause() {
         sdkService.pause()
-        saveCurrentProgress()
+        // FIX 6: Do NOT call saveCurrentProgress() here — currentProgress is throttled
+        // and may be stale by up to 5 seconds. The Combine subscription above saves
+        // progress when isPlaying transitions to false (SDK-confirmed pause position).
     }
 
     func resume() {
@@ -115,7 +119,6 @@ final class PlayerViewModel: ObservableObject {
 
     private func saveCurrentProgress() {
         guard let uri = currentTrackURI else { return }
-        // Doppelte Absicherung — kein Speichern in den ersten 10 Sekunden
         guard currentProgress > 10.0 else {
             logger.debug("Skipping progress save — too early (\(self.currentProgress)s)")
             return
@@ -123,7 +126,6 @@ final class PlayerViewModel: ObservableObject {
         UserDefaults.standard.set(currentProgress, forKey: progressCacheKeyPrefix + uri)
         logger.debug("Saved progress \(self.currentProgress)s for \(uri, privacy: .public)")
     }
-
 
     /// Skips to the previous track/episode.
     func previous() {

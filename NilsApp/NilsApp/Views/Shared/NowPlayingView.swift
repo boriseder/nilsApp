@@ -1,12 +1,3 @@
-
-//
-//  NowPlayingView 2.swift
-//  NilsApp
-//
-//  Created by Boris Eder on 18.04.26.
-//
-
-
 // Views/Shared Group
 import SwiftUI
 
@@ -16,6 +7,12 @@ import SwiftUI
 struct NowPlayingView: View {
     @EnvironmentObject var playerViewModel: PlayerViewModel
     @Environment(\.dismiss) private var dismiss
+
+    // FIX 4: Local drag state so the slider feels responsive without hammering
+    // the Spotify SDK with a seek call on every frame of a drag gesture.
+    @State private var isDragging: Bool = false
+    @State private var dragValue: TimeInterval = 0
+    @State private var scrubDebounceTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,7 +25,6 @@ struct NowPlayingView: View {
 
             if playerViewModel.hasPauseTimeoutOccurred {
                 // SDK timed out after ~30s pause — show reconnect affordance
-                // per GEMINI.md: never do a keepalive heartbeat, always show a manual reconnect
                 reconnectView
             } else {
                 mainPlayerContent
@@ -104,19 +100,37 @@ struct NowPlayingView: View {
 
     private var scrubberView: some View {
         VStack(spacing: 6) {
-            // We use a Slider bound to a local drag state so scrubbing feels
-            // responsive even if the SDK takes a moment to seek.
+            // FIX 4: Use local drag state so the slider thumb tracks the finger immediately,
+            // but the actual SDK seek is debounced — only fired 150ms after the user stops
+            // moving. This prevents flooding the Spotify App Remote with dozens of IPC calls
+            // per second during a fast scrub, which could cause disconnects.
             Slider(
                 value: Binding(
-                    get: { playerViewModel.currentProgress },
-                    set: { playerViewModel.scrub(to: $0) }
+                    get: {
+                        isDragging ? dragValue : playerViewModel.currentProgress
+                    },
+                    set: { newValue in
+                        isDragging = true
+                        dragValue = newValue
+
+                        // Debounce: cancel the previous pending seek and schedule a new one.
+                        scrubDebounceTask?.cancel()
+                        scrubDebounceTask = Task {
+                            try? await Task.sleep(for: .milliseconds(150))
+                            guard !Task.isCancelled else { return }
+                            await MainActor.run {
+                                playerViewModel.scrub(to: newValue)
+                                isDragging = false
+                            }
+                        }
+                    }
                 ),
                 in: 0...max(playerViewModel.trackDuration, 1)
             )
             .accentColor(.primary)
 
             HStack {
-                Text(formatTime(playerViewModel.currentProgress))
+                Text(formatTime(isDragging ? dragValue : playerViewModel.currentProgress))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
@@ -163,7 +177,6 @@ struct NowPlayingView: View {
     // MARK: - Reconnect View
 
     /// Shown when the SDK disconnects after ~30s pause timeout.
-    /// Per architecture rules, we NEVER do a keepalive heartbeat — we always show this instead.
     private var reconnectView: some View {
         VStack(spacing: 32) {
             Spacer()

@@ -49,20 +49,24 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
                 }
             })
 
-            // Pending Seek ausführen — wird gesetzt wenn play() ohne aktive
-            // Verbindung aufgerufen wurde und authorizeAndPlayURI verwendet hat.
+            // FIX 1: Execute pending seek if position > 0, then always clear the pending state.
+            // Previously, if position was nil or 0 the pending properties were never cleared,
+            // causing a stale seek to fire on any subsequent reconnect.
             if let uri = service.pendingSeekURI,
                let position = service.pendingSeekPosition,
                position > 0 {
                 service.logger.info("Executing pending seek to \(position)s for URI: \(uri)")
-                // Kurze Verzögerung — Spotify braucht einen Moment nach dem Connect
-                // bevor der playerAPI Seek-Commands annimmt.
+                // Short delay — Spotify needs a moment after connect before playerAPI accepts seeks.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     appRemote.playerAPI?.seek(toPosition: Int(position * 1000))
                     service.logger.info("Pending seek executed at \(position)s.")
                     service.pendingSeekURI = nil
                     service.pendingSeekPosition = nil
                 }
+            } else {
+                // Always clear pending state on connect, even if we didn't seek.
+                service.pendingSeekURI = nil
+                service.pendingSeekPosition = nil
             }
         }
     }
@@ -70,6 +74,9 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
     func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
         Task { @MainActor [weak service] in
             service?.isConnected = false
+            // FIX 2: Clear isOpeningSpotify on connection failure so the "Opening Spotify…"
+            // toast doesn't spin forever (e.g. Spotify not installed).
+            service?.isOpeningSpotify = false
             service?.logger.error("SDK connection failed: \(error?.localizedDescription ?? "no error")")
         }
     }
@@ -144,13 +151,15 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // never has to fight the module-wide @MainActor default.
     private var delegateShim: SpotifyDelegateShim?
 
-    // NEU: schwache Referenz auf APIService
     private weak var apiService: SpotifyAPIService?
 
-    // In SpotifySDKService — als private Property hinzufügen:
     private var localNetworkBrowser: NWBrowser?
 
     private var isConnecting = false
+
+    // FIX 2: Task handle for the "Spotify not installed" timeout so it can be cancelled
+    // if the connection succeeds before the timeout fires.
+    private var openingSpotifyTimeoutTask: Task<Void, Never>?
     
     // MARK: - Init
 
@@ -214,20 +223,14 @@ final class SpotifySDKService: NSObject, ObservableObject {
     }
     
     func triggerLocalNetworkPrivacyAlert() {
-        // Ein NetServiceBrowser-Lookup auf _spotify-connect._tcp
-        // ist der einzige zuverlässige Weg, den iOS-Dialog zu triggern,
-        // weil iOS ihn an Bonjour/Multicast-Aktivität knüpft — nicht an TCP.
         let browser = NWBrowser(
             for: .bonjourWithTXTRecord(type: "_spotify-connect._tcp", domain: "local."),
             using: .tcp
         )
-        browser.stateUpdateHandler = { state in
-            // Nur zum Triggern des Dialogs — Ergebnis ist irrelevant
-        }
+        browser.stateUpdateHandler = { state in }
         browser.browseResultsChangedHandler = { _, _ in }
         browser.start(queue: .main)
         
-        // Nach 3 Sekunden stoppen — wir wollen nur den Dialog, keine dauernde Suche
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
             browser.cancel()
         }
@@ -236,12 +239,25 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // MARK: - Playback Controls
 
     func play(uri: String, fromPosition position: TimeInterval? = nil) {
-            guard isConnected else {
-                logger.warning("Not connected — using authorizeAndPlayURI.")
-                pendingSeekURI = uri
-                pendingSeekPosition = position
-            isOpeningSpotify = true  // Toast anzeigen
-            
+        guard isConnected else {
+            logger.warning("Not connected — using authorizeAndPlayURI.")
+            pendingSeekURI = uri
+            pendingSeekPosition = position
+            isOpeningSpotify = true
+
+            // FIX 2: Start a 10-second timeout. If Spotify never opens/connects (e.g. not
+            // installed), isOpeningSpotify is cleared so the toast doesn't spin forever.
+            openingSpotifyTimeoutTask?.cancel()
+            openingSpotifyTimeoutTask = Task {
+                try? await Task.sleep(for: .seconds(10))
+                await MainActor.run {
+                    if self.isOpeningSpotify {
+                        self.isOpeningSpotify = false
+                        self.logger.warning("Spotify open timeout — Spotify may not be installed.")
+                    }
+                }
+            }
+
             Task {
                 do {
                     guard let api = apiService else { return }
@@ -251,15 +267,18 @@ final class SpotifySDKService: NSObject, ObservableObject {
                         self.appRemote?.authorizeAndPlayURI(uri)
                     }
                 } catch {
-                    self.isOpeningSpotify = false  // Bei Fehler zurücksetzen
+                    self.isOpeningSpotify = false
+                    self.openingSpotifyTimeoutTask?.cancel()
                     logger.error("Token error: \(error.localizedDescription)")
                 }
             }
             return
         }
 
-        
-        // Bereits verbunden — normal abspielen
+        // Already connected — play normally.
+        // Cancel any pending open-timeout since we're already connected.
+        openingSpotifyTimeoutTask?.cancel()
+
         if let position = position, position > 0 {
             pendingSeekURI = uri
             pendingSeekPosition = position
@@ -271,6 +290,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
         logger.info("Playing URI: \(uri, privacy: .public)")
         appRemote?.playerAPI?.play(uri)
     }
+
     func pause() {
         logger.info("Pausing playback.")
         appRemote?.playerAPI?.pause()
