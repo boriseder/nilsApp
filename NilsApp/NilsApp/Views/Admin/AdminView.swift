@@ -14,33 +14,31 @@ struct AdminView: View {
     
     var body: some View {
         NavigationStack {
-            // --- DEVELOPMENT MODE: BYPASS PIN ENTRY ---
-            // if !viewModel.isUnlocked {
-            //     PINEntryView(viewModel: viewModel) // PINEntryView will handle its own dismissal
-            // } else {
+            // PIN-Check ist jetzt in PINEntryView — hier nur noch den
+            // eigentlichen Admin-Content zeigen (isUnlocked ist garantiert true
+            // wenn wir hier ankommen)
             List {
                 spotifyAccountSection
                 audiobooksSection
                 musicSection
                 podcastsSection
             }
-            .navigationTitle("Admin Area")
+            .navigationTitle("Admin-Bereich")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    // Close button dismisses the sheet directly during development
-                    Button("Close / Lock") {
+                    Button("Sperren") {
+                        viewModel.lock()
                         dismiss()
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .foregroundColor(.red)
                 }
             }
             .sheet(isPresented: $showingSearchSheet) {
                 AdminSearchView(category: searchCategory)
                     .environmentObject(viewModel)
-            // }
             }
-        } // End of NavigationStack
+        }
     }
     
     // MARK: - List Sections

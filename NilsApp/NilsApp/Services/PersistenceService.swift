@@ -67,10 +67,10 @@ final class PersistenceService: ObservableObject {
     
     private func load() {
         do {
-            let data = try Data(contentsOf: fileURL(albumsCacheFile))
-            curatedContent = try JSONDecoder().decode(CuratedContent.self, from: Data(contentsOf: fileURL(fileName)))
+            let data = try Data(contentsOf: fileURL(fileName))
+            curatedContent = try JSONDecoder().decode(CuratedContent.self, from: data)
         } catch {
-            logger.warning("Could not load curated content (expected on first launch): \(error.localizedDescription)")
+            logger.warning("Could not load curated content: \(error.localizedDescription)")
             curatedContent = .empty
         }
     }

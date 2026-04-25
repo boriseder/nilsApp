@@ -150,6 +150,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // In SpotifySDKService — als private Property hinzufügen:
     private var localNetworkBrowser: NWBrowser?
 
+    private var isConnecting = false
     
     // MARK: - Init
 
@@ -177,13 +178,20 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // MARK: - Connection Lifecycle
 
     func connect() {
-        // Falls wir bereits verbinden oder verbunden sind, abbrechen
-        guard !isConnected else { return }
-        
+        guard !isConnected, !isConnecting else {
+            logger.debug("connect() ignored — already connected or connecting.")
+            return
+        }
+        isConnecting = true
         logger.info("Attempting to connect to Spotify App...")
         hasPauseTimeoutOccurred = false
-        
+
         Task {
+            defer {
+                Task { @MainActor in
+                    self.isConnecting = false
+                }
+            }
             do {
                 guard let api = apiService else {
                     logger.error("APIService is nil")
@@ -195,12 +203,11 @@ final class SpotifySDKService: NSObject, ObservableObject {
                     self.appRemote?.connect()
                 }
             } catch {
-                // Das wird uns den genauen Grund verraten (z.B. HTTP 401 oder Keychain Error)
                 logger.error("Token error: \(error.localizedDescription)")
             }
         }
     }
-    
+
     func disconnect() {
         logger.info("Disconnecting from Spotify App...")
         appRemote?.disconnect()

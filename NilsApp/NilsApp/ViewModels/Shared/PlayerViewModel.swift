@@ -79,8 +79,11 @@ final class PlayerViewModel: ObservableObject {
             return
         }
 
-        currentTrackURI = uri
 
+        // currentTrackURI NICHT hier setzen — kommt vom SDK via playerStateDidChange
+        // currentTrackURI = uri
+
+        
         if isLongForm {
             let savedProgress = UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
             if savedProgress > 0 {
