@@ -3,6 +3,7 @@ import Foundation
 import Combine
 import os
 import SpotifyiOS
+import Network
 
 // MARK: - Delegate Shim
 //
@@ -148,29 +149,51 @@ final class SpotifySDKService: NSObject, ObservableObject {
         appRemote = remote
         delegateShim = shim
         logger.debug("Spotify App Remote initialized.")
+        triggerLocalNetworkPrivacyAlert()
     }
 
     // MARK: - Connection Lifecycle
 
     func connect() {
+        // Falls wir bereits verbinden oder verbunden sind, abbrechen
+        guard !isConnected else { return }
+        
         logger.info("Attempting to connect to Spotify App...")
         hasPauseTimeoutOccurred = false
         
         Task {
-            if let token = try? await apiService?.getValidToken() {
-                appRemote?.connectionParameters.accessToken = token
-            }
-            await MainActor.run {
-                appRemote?.connect()
+            do {
+                guard let api = apiService else {
+                    logger.error("APIService is nil")
+                    return
+                }
+                let token = try await api.getValidToken()
+                await MainActor.run {
+                    self.appRemote?.connectionParameters.accessToken = token
+                    self.appRemote?.connect()
+                }
+            } catch {
+                // Das wird uns den genauen Grund verraten (z.B. HTTP 401 oder Keychain Error)
+                logger.error("Token error: \(error.localizedDescription)")
             }
         }
-
-        
     }
-
+    
     func disconnect() {
         logger.info("Disconnecting from Spotify App...")
         appRemote?.disconnect()
+    }
+    
+    func triggerLocalNetworkPrivacyAlert() {
+        let host = NWEndpoint.Host("127.0.0.1")
+        let port = NWEndpoint.Port(integerLiteral: 9095)
+        let connection = NWConnection(host: host, port: port, using: .tcp)
+        
+        connection.stateUpdateHandler = { state in
+            // Dies triggert den iOS-Dialog beim ersten Mal
+            print("Network state update: \(state)")
+        }
+        connection.start(queue: .main)
     }
 
     // MARK: - Playback Controls

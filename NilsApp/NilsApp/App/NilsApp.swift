@@ -35,14 +35,20 @@ struct NilsAppApp: App {
     @State private var showSplash = true
     
     init() {
-        let apiService = SpotifyAPIService()
-        let sdkService = SpotifySDKService(apiService: apiService)
-
-        _spotifyAPIService = StateObject(wrappedValue: apiService)
-        _spotifySDKService = StateObject(wrappedValue: sdkService)
-        _persistenceService = StateObject(wrappedValue: PersistenceService())
-        _spotifyAPIService = StateObject(wrappedValue: SpotifyAPIService())
-        _playerViewModel = StateObject(wrappedValue: PlayerViewModel(sdkService: sdkService))
+        // 1. Erstelle die Basis-Instanzen
+            let api = SpotifyAPIService()
+            let sdk = SpotifySDKService(apiService: api)
+            let persistence = PersistenceService()
+            
+            // 2. Initialisiere die StateObjects EINMALIG mit diesen Instanzen
+            _spotifyAPIService = StateObject(wrappedValue: api)
+            _spotifySDKService = StateObject(wrappedValue: sdk)
+            _persistenceService = StateObject(wrappedValue: persistence)
+            
+            // 3. PlayerViewModel nutzt das bereits erstellte sdk
+            _playerViewModel = StateObject(wrappedValue: PlayerViewModel(sdkService: sdk))
+            
+            // WICHTIG: Keine weiteren Zuweisungen an _spotifyAPIService danach!
     }
 
     var body: some Scene {
