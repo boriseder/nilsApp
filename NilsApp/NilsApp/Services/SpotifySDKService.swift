@@ -23,7 +23,7 @@ import Network
 /// A lightweight ObjC-compatible shim that receives Spotify SDK callbacks and
 /// forwards them to `SpotifySDKService` on the MainActor.
 final class SpotifyDelegateShim: NSObject {
-
+    
     // Weak reference back to the service — avoids retain cycles.
     weak var service: SpotifySDKService?
 
@@ -40,6 +40,7 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
             guard let service = self?.service else { return }
             service.isConnected = true
             service.hasPauseTimeoutOccurred = false
+            service.isOpeningSpotify = false
             service.logger.info("Spotify App Remote connected.")
             appRemote.playerAPI?.delegate = self
             appRemote.playerAPI?.subscribe(toPlayerState: { (_, error) in
@@ -47,6 +48,22 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
                     service.logger.error("Subscribe error: \(error.localizedDescription)")
                 }
             })
+
+            // Pending Seek ausführen — wird gesetzt wenn play() ohne aktive
+            // Verbindung aufgerufen wurde und authorizeAndPlayURI verwendet hat.
+            if let uri = service.pendingSeekURI,
+               let position = service.pendingSeekPosition,
+               position > 0 {
+                service.logger.info("Executing pending seek to \(position)s for URI: \(uri)")
+                // Kurze Verzögerung — Spotify braucht einen Moment nach dem Connect
+                // bevor der playerAPI Seek-Commands annimmt.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    appRemote.playerAPI?.seek(toPosition: Int(position * 1000))
+                    service.logger.info("Pending seek executed at \(position)s.")
+                    service.pendingSeekURI = nil
+                    service.pendingSeekPosition = nil
+                }
+            }
         }
     }
 
@@ -111,6 +128,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
     @Published fileprivate(set) var trackDuration: TimeInterval = 0
     @Published fileprivate(set) var trackImageURL: URL?
     @Published fileprivate(set) var trackName: String?
+    @Published fileprivate(set) var isOpeningSpotify: Bool = false
 
     // MARK: - Internal (accessed by shim)
 
@@ -211,12 +229,11 @@ final class SpotifySDKService: NSObject, ObservableObject {
     // MARK: - Playback Controls
 
     func play(uri: String, fromPosition position: TimeInterval? = nil) {
-        guard isConnected else {
-            logger.warning("Not connected — using authorizeAndPlayURI.")
-            
-            // Speichere URI für nach der Verbindung
-            pendingSeekURI = uri
-            pendingSeekPosition = position
+            guard isConnected else {
+                logger.warning("Not connected — using authorizeAndPlayURI.")
+                pendingSeekURI = uri
+                pendingSeekPosition = position
+            isOpeningSpotify = true  // Toast anzeigen
             
             Task {
                 do {
@@ -224,15 +241,16 @@ final class SpotifySDKService: NSObject, ObservableObject {
                     let token = try await api.getValidToken()
                     await MainActor.run {
                         self.appRemote?.connectionParameters.accessToken = token
-                        // DAS ist der korrekte Spotify SDK Flow:
                         self.appRemote?.authorizeAndPlayURI(uri)
                     }
                 } catch {
+                    self.isOpeningSpotify = false  // Bei Fehler zurücksetzen
                     logger.error("Token error: \(error.localizedDescription)")
                 }
             }
             return
         }
+
         
         // Bereits verbunden — normal abspielen
         if let position = position, position > 0 {

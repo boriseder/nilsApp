@@ -1,36 +1,45 @@
-//
-//  PodcastViewModel.swift
-//  nilsApp
-//
-//  Created by Boris on 18/04/2026.
-//
-
 import Foundation
 import Combine
 import os
 
-/// ViewModel for podcast shows, responsible for fetching and managing
-/// the list of episodes for specific curated shows.
 @MainActor
 final class PodcastViewModel: ObservableObject {
     @Published private(set) var episodes: [SpotifyEpisode] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
 
-    let shows: [CuratedShow]
-    private let apiService: SpotifyAPIService
-    private let persistenceService: PersistenceService
+    private(set) var shows: [CuratedShow] = []
+    private var apiService: SpotifyAPIService?
+    private var persistenceService: PersistenceService?
+    private var isConfigured = false
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "PodcastViewModel")
 
-    init(shows: [CuratedShow], apiService: SpotifyAPIService, persistenceService: PersistenceService) {
+    init() {}
+
+    func configure(
+        shows: [CuratedShow],
+        apiService: SpotifyAPIService,
+        persistenceService: PersistenceService
+    ) {
+        guard !isConfigured || self.shows != shows else { return }
         self.shows = shows
         self.apiService = apiService
         self.persistenceService = persistenceService
+        self.isConfigured = true
+        if self.shows != shows {
+            self.episodes = []
+        }
     }
 
-    /// Fetches all episodes — uses disk cache unless forceRefresh is true.
     func fetchEpisodes(forceRefresh: Bool = false) {
         guard !isLoading else { return }
+        Task { await fetchEpisodesAsync(forceRefresh: forceRefresh) }
+    }
+
+    func fetchEpisodesAsync(forceRefresh: Bool = false) async {
+        guard !isLoading, let apiService, let persistenceService else { return }
+        guard !shows.isEmpty else { return }
 
         let showIds = shows.map { $0.id }
 
@@ -42,19 +51,16 @@ final class PodcastViewModel: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching episodes for \(self.shows.count) shows from API.")
 
-        Task {
-            do {
-                let fetched = try await apiService.fetchPodcastEpisodes(showIds: showIds)
-                persistenceService.saveEpisodes(fetched, for: showIds)
-                self.episodes = fetched
-                self.logger.info("Successfully fetched \(fetched.count) total episodes.")
-            } catch {
-                self.errorMessage = "Failed to load episodes: \(error.localizedDescription)"
-                self.logger.error("Failed to fetch podcast episodes: \(error.localizedDescription)")
-            }
-            self.isLoading = false
+        do {
+            let fetched = try await apiService.fetchPodcastEpisodes(showIds: showIds)
+            persistenceService.saveEpisodes(fetched, for: showIds)
+            self.episodes = fetched
+            logger.info("Successfully fetched \(fetched.count) total episodes.")
+        } catch {
+            self.errorMessage = "Failed to load episodes: \(error.localizedDescription)"
+            logger.error("Failed to fetch podcast episodes: \(error.localizedDescription)")
         }
+        self.isLoading = false
     }
 }

@@ -29,11 +29,15 @@ struct PodcastShowSelectionView: View {
                     ForEach(shows) { show in
                         NavigationLink {
                             PodcastShowView(
-                                viewModel: PodcastViewModel(
-                                    shows: [show],
-                                    apiService: spotifyAPIService,
-                                    persistenceService: persistenceService
-                                )
+                                viewModel: {
+                                    let vm = PodcastViewModel()
+                                    vm.configure(
+                                        shows: [show],
+                                        apiService: spotifyAPIService,
+                                        persistenceService: persistenceService
+                                    )
+                                    return vm
+                                }()
                             )
                         } label: {
                             ItemTile(

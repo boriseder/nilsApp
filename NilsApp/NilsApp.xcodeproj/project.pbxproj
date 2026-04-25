@@ -24,11 +24,22 @@
 		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		A139C1FC2F9CCDC300AA5E6A /* Exceptions for "NilsApp" folder in "Copy Bundle Resources" phase from "NilsApp" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = A1BB16912F940953002FB419 /* Resources */;
+			membershipExceptions = (
+				Helpers/DurationFormatter.swift,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A1BB16952F940953002FB419 /* NilsApp */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			exceptions = (
 				A13E81752F94232100C9DA42 /* Exceptions for "NilsApp" folder in "NilsApp" target */,
+				A139C1FC2F9CCDC300AA5E6A /* Exceptions for "NilsApp" folder in "Copy Bundle Resources" phase from "NilsApp" target */,
 			);
 			path = NilsApp;
 			sourceTree = "<group>";

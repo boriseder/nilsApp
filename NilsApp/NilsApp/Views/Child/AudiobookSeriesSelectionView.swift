@@ -1,13 +1,6 @@
-//
-//  AudiobookSeriesSelectionView.swift
-//  nilsApp
-//
-//  Created by Boris on 18/04/2026.
-//
-
+// KOMPLETT — AudiobookSeriesSelectionView.swift
 import SwiftUI
 
-/// A view that displays a grid of curated audiobook series for the child to choose from.
 struct AudiobookSeriesSelectionView: View {
     let artists: [CuratedArtist]
     @EnvironmentObject private var spotifyAPIService: SpotifyAPIService
@@ -28,11 +21,16 @@ struct AudiobookSeriesSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(artists) { artist in
                         NavigationLink {
-                            AudiobookGridView(viewModel: AudiobookGridViewModel(
-                                artists: [artist],
-                                apiService: spotifyAPIService,
-                                persistenceService: persistenceService
-                            ))
+                            // Immer nur den gewählten Artist — nie das ganze Array
+                            AudiobookGridView(viewModel: {
+                                let vm = AudiobookGridViewModel()
+                                vm.configure(
+                                    artists: [artist],  // ← explizit nur dieser eine Artist
+                                    apiService: spotifyAPIService,
+                                    persistenceService: persistenceService
+                                )
+                                return vm
+                            }())
                         } label: {
                             ItemTile(
                                 title: artist.name,

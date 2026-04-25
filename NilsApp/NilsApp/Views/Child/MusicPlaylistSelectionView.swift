@@ -28,11 +28,15 @@ struct MusicPlaylistSelectionView: View {
                 LazyVGrid(columns: columns, spacing: 40) {
                     ForEach(playlists) { playlist in
                         NavigationLink {
-                            MusicPlaylistView(viewModel: PlaylistViewModel(
-                                playlists: [playlist],
-                                apiService: spotifyAPIService,
-                                persistenceService: persistenceService
-                            ))
+                            MusicPlaylistView(viewModel: {
+                                let vm = PlaylistViewModel()
+                                vm.configure(
+                                    playlists: [playlist],
+                                    apiService: spotifyAPIService,
+                                    persistenceService: persistenceService
+                                )
+                                return vm
+                            }())
                         } label: {
                             ItemTile(
                                 title: playlist.name,

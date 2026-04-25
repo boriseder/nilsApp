@@ -1,36 +1,45 @@
-//
-//  PlaylistViewModel.swift
-//  nilsApp
-//
-//  Created by Boris on 18/04/2026.
-//
-
 import Foundation
 import Combine
 import os
 
-/// ViewModel for a music playlist, responsible for fetching and managing
-/// the list of tracks for a specific curated playlist.
 @MainActor
 final class PlaylistViewModel: ObservableObject {
     @Published private(set) var tracks: [SpotifyTrack] = []
     @Published private(set) var isLoading: Bool = false
     @Published private(set) var errorMessage: String?
 
-    let playlists: [CuratedPlaylist]
-    private let apiService: SpotifyAPIService
-    private let persistenceService: PersistenceService
+    private(set) var playlists: [CuratedPlaylist] = []
+    private var apiService: SpotifyAPIService?
+    private var persistenceService: PersistenceService?
+    private var isConfigured = false
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlaylistViewModel")
 
-    init(playlists: [CuratedPlaylist], apiService: SpotifyAPIService, persistenceService: PersistenceService) {
+    init() {}
+
+    func configure(
+        playlists: [CuratedPlaylist],
+        apiService: SpotifyAPIService,
+        persistenceService: PersistenceService
+    ) {
+        guard !isConfigured || self.playlists != playlists else { return }
         self.playlists = playlists
         self.apiService = apiService
         self.persistenceService = persistenceService
+        self.isConfigured = true
+        if self.playlists != playlists {
+            self.tracks = []
+        }
     }
 
-    /// Fetches all tracks — uses disk cache unless forceRefresh is true.
     func fetchTracks(forceRefresh: Bool = false) {
         guard !isLoading else { return }
+        Task { await fetchTracksAsync(forceRefresh: forceRefresh) }
+    }
+
+    func fetchTracksAsync(forceRefresh: Bool = false) async {
+        guard !isLoading, let apiService, let persistenceService else { return }
+        guard !playlists.isEmpty else { return }
 
         let playlistIds = playlists.map { $0.id }
 
@@ -42,19 +51,16 @@ final class PlaylistViewModel: ObservableObject {
 
         isLoading = true
         errorMessage = nil
-        logger.info("Fetching tracks for \(self.playlists.count) playlists from API.")
 
-        Task {
-            do {
-                let fetched = try await apiService.fetchPlaylistTracks(playlistIds: playlistIds)
-                persistenceService.saveTracks(fetched, for: playlistIds)
-                self.tracks = fetched
-                self.logger.info("Successfully fetched \(fetched.count) total tracks.")
-            } catch {
-                self.errorMessage = "Failed to load music: \(error.localizedDescription)"
-                self.logger.error("Failed to fetch playlist tracks: \(error.localizedDescription)")
-            }
-            self.isLoading = false
+        do {
+            let fetched = try await apiService.fetchPlaylistTracks(playlistIds: playlistIds)
+            persistenceService.saveTracks(fetched, for: playlistIds)
+            self.tracks = fetched
+            logger.info("Successfully fetched \(fetched.count) total tracks.")
+        } catch {
+            self.errorMessage = "Failed to load music: \(error.localizedDescription)"
+            logger.error("Failed to fetch playlist tracks: \(error.localizedDescription)")
         }
+        self.isLoading = false
     }
 }

@@ -266,8 +266,8 @@ final class SpotifyAPIService: ObservableObject {
 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                     let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if retryAfter > 10 {
-                        logger.error("Spotify Rate Limit too high (\(retryAfter)s). Aborting.")
+                    if retryAfter > 30 {
+                        logger.error("Spotify Rate Limit dauerhaft (\(retryAfter)s). Zeige Fehlermeldung.")
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
@@ -351,14 +351,15 @@ final class SpotifyAPIService: ObservableObject {
 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                     let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if retryAfter > 10 {
-                        logger.error("Spotify Rate Limit too high (\(retryAfter)s). Aborting.")
+                    if retryAfter > 30 {
+                        logger.error("Spotify Rate Limit dauerhaft (\(retryAfter)s). Zeige Fehlermeldung.")
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
                     try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
+
 
                 if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
                     if httpResponse.statusCode == 403 {
@@ -474,14 +475,15 @@ final class SpotifyAPIService: ObservableObject {
 
                 if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 429 {
                     let retryAfter = Int(httpResponse.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if retryAfter > 10 {
-                        logger.error("Spotify Rate Limit too high (\(retryAfter)s). Aborting.")
+                    if retryAfter > 30 {
+                        logger.error("Spotify Rate Limit dauerhaft (\(retryAfter)s). Zeige Fehlermeldung.")
                         throw APIError.rateLimited(retryAfter: retryAfter)
                     }
                     logger.warning("Spotify Rate Limit (429) hit. Waiting \(retryAfter) seconds.")
                     try await Task.sleep(for: .seconds(retryAfter))
                     continue
                 }
+
 
                 if let httpResponse = response as? HTTPURLResponse, !(200...299).contains(httpResponse.statusCode) {
                     let errorString = String(data: data, encoding: .utf8) ?? "Unknown Error"
