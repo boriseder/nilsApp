@@ -1,3 +1,4 @@
+// Child ViewModels Group
 import Foundation
 import Combine
 import os
@@ -11,7 +12,6 @@ final class PodcastViewModel: ObservableObject {
     private(set) var shows: [CuratedShow] = []
     private var apiService: SpotifyAPIService?
     private var persistenceService: PersistenceService?
-    private var isConfigured = false
 
     private let logger = Logger(subsystem: "com.nilsapp", category: "PodcastViewModel")
 
@@ -22,14 +22,18 @@ final class PodcastViewModel: ObservableObject {
         apiService: SpotifyAPIService,
         persistenceService: PersistenceService
     ) {
-        guard !isConfigured || self.shows != shows else { return }
-        self.shows = shows
         self.apiService = apiService
         self.persistenceService = persistenceService
-        self.isConfigured = true
-        if self.shows != shows {
-            self.episodes = []
+
+        // BUG 1 FIX: same pattern as AudiobookGridViewModel.
+        guard self.shows != shows else {
+            logger.debug("configure() — show list unchanged, skipping.")
+            return
         }
+
+        logger.info("configure() — show list changed, resetting episodes.")
+        self.shows = shows
+        self.episodes = []
     }
 
     func fetchEpisodes(forceRefresh: Bool = false) {
@@ -45,7 +49,7 @@ final class PodcastViewModel: ObservableObject {
 
         if !forceRefresh, let cached = persistenceService.loadEpisodes(for: showIds) {
             self.episodes = cached
-            logger.info("Using cached episodes — no API call needed.")
+            logger.info("Episodes served from cache (\(cached.count) items).")
             return
         }
 
@@ -56,10 +60,15 @@ final class PodcastViewModel: ObservableObject {
             let fetched = try await apiService.fetchPodcastEpisodes(showIds: showIds)
             persistenceService.saveEpisodes(fetched, for: showIds)
             self.episodes = fetched
-            logger.info("Successfully fetched \(fetched.count) total episodes.")
+            logger.info("Fetched \(fetched.count) episodes from Spotify.")
+        } catch SpotifyAPIService.APIError.rateLimited(let retryAfter) {
+            self.errorMessage = retryAfter > 60
+                ? "Spotify needs a break. Try again a little later!"
+                : "Spotify needs a break. Try again in \(retryAfter) seconds."
+            logger.error("Rate limited — retryAfter: \(retryAfter)s")
         } catch {
             self.errorMessage = "Failed to load episodes: \(error.localizedDescription)"
-            logger.error("Failed to fetch podcast episodes: \(error.localizedDescription)")
+            logger.error("Failed to fetch episodes: \(error.localizedDescription)")
         }
         self.isLoading = false
     }
