@@ -4,33 +4,24 @@
 <dict>
 	<key>CFBundleIdentifier</key>
 	<string>at.amtabor.NilsApp</string>
-
 	<key>CFBundleName</key>
 	<string>NilsApp</string>
-
 	<key>CFBundleDisplayName</key>
 	<string>NilsApp</string>
-
 	<key>CFBundleVersion</key>
 	<string>1</string>
-
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
-
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
-
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
-
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_spotify-connect._tcp</string>
 	</array>
-
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>NilsApp benötigt Zugriff auf das lokale Netzwerk, um die Musikwiedergabe mit der Spotify-App zu steuern.</string>
-
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -44,15 +35,31 @@
 			</array>
 		</dict>
 	</array>
-
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>spotify</string>
 	</array>
-
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
 	</array>
+	
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+
+	<key>UILaunchScreen</key>
+	<dict/>
 </dict>
 </plist>
