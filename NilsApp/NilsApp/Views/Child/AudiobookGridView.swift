@@ -114,7 +114,9 @@ struct AudiobookGridView: View {
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                 withAnimation { pressedAlbumId = nil }
-                playerViewModel.play(uri: album.uri, isLongForm: true)
+                // Play the album URI as the context so Spotify auto-advances between
+                // tracks/chapters within the album — enabling gapless playback.
+                playerViewModel.play(uri: album.uri, contextURI: album.uri, isLongForm: true)
             }
         }
     }

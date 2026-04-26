@@ -79,8 +79,17 @@ final class PlayerViewModel: ObservableObject {
 
     // MARK: - Playback Commands
 
-    /// Plays a given URI. If it's long-form content, it checks for a local position cache.
-    func play(uri: String, isLongForm: Bool) {
+    /// Plays a given URI.
+    ///
+    /// - Parameters:
+    ///   - uri: The Spotify URI of the individual item (track, album, episode).
+    ///   - contextURI: The Spotify URI of the *container* (playlist URI for tracks,
+    ///     show URI for episodes, album URI for audiobook chapters). When provided,
+    ///     Spotify plays the full context and auto-advances to the next item —
+    ///     enabling gapless / continuous playback. Pass `nil` for standalone items.
+    ///   - isLongForm: When `true`, the app checks for a locally-saved resume position
+    ///     and seeks to it on play (used for audiobooks and podcast episodes).
+    func play(uri: String, contextURI: String? = nil, isLongForm: Bool) {
         guard uri != currentTrackURI || !isPlaying else {
             logger.info("Ignoring duplicate play call for URI: \(uri, privacy: .public)")
             return
@@ -90,12 +99,12 @@ final class PlayerViewModel: ObservableObject {
             let savedProgress = UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
             if savedProgress > 0 {
                 logger.info("Found local playback cache for \(uri, privacy: .public) at \(savedProgress)s.")
-                sdkService.play(uri: uri, fromPosition: savedProgress)
+                sdkService.play(uri: uri, contextURI: contextURI, fromPosition: savedProgress)
             } else {
-                sdkService.play(uri: uri)
+                sdkService.play(uri: uri, contextURI: contextURI)
             }
         } else {
-            sdkService.play(uri: uri)
+            sdkService.play(uri: uri, contextURI: contextURI)
         }
     }
     

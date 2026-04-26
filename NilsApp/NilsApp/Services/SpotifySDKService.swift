@@ -49,6 +49,20 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
                 }
             })
 
+            // FIX RESUME: If a resume was requested while disconnected, execute it now.
+            // This must be checked before the seek logic, because a resume-after-timeout
+            // should just call resume() — the SDK will restore the last playback position.
+            if service.pendingResume {
+                service.pendingResume = false
+                service.pendingSeekURI = nil
+                service.pendingSeekPosition = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    service.logger.info("Executing pending resume after reconnect.")
+                    appRemote.playerAPI?.resume()
+                }
+                return
+            }
+
             // FIX 1: Execute pending seek if position > 0, then always clear the pending state.
             // Previously, if position was nil or 0 the pending properties were never cleared,
             // causing a stale seek to fire on any subsequent reconnect.
@@ -77,6 +91,7 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
             // FIX 2: Clear isOpeningSpotify on connection failure so the "Opening Spotify…"
             // toast doesn't spin forever (e.g. Spotify not installed).
             service?.isOpeningSpotify = false
+            service?.pendingResume = false
             service?.logger.error("SDK connection failed: \(error?.localizedDescription ?? "no error")")
         }
     }
@@ -142,6 +157,9 @@ final class SpotifySDKService: NSObject, ObservableObject {
     internal let logger = Logger(subsystem: "com.nilsapp", category: "SpotifySDKService")
     internal var pendingSeekURI: String?
     internal var pendingSeekPosition: TimeInterval?
+    /// Set to true when resume() is called while disconnected; cleared after the
+    /// reconnect delegate fires and issues the actual playerAPI?.resume().
+    internal var pendingResume: Bool = false
 
     // MARK: - Private
 
@@ -238,10 +256,19 @@ final class SpotifySDKService: NSObject, ObservableObject {
 
     // MARK: - Playback Controls
 
-    func play(uri: String, fromPosition position: TimeInterval? = nil) {
+    /// Plays a URI. Pass `contextURI` (album/playlist/show URI) to enable
+    /// continuous/gapless playback of the whole context; `uri` is then used
+    /// only as the starting offset within that context.
+    func play(uri: String, contextURI: String? = nil, fromPosition position: TimeInterval? = nil) {
+        // Resolve what we will actually hand to the SDK.
+        // If a context is provided, we play the context so Spotify handles
+        // auto-advance. The individual item URI is stored for the seek-on-connect path.
+        let playURI = contextURI ?? uri
+
         guard isConnected else {
             logger.warning("Not connected — using authorizeAndPlayURI.")
-            pendingSeekURI = uri
+            pendingResume = false
+            pendingSeekURI = uri           // seek target is always the item, not context
             pendingSeekPosition = position
             isOpeningSpotify = true
 
@@ -264,7 +291,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
                     let token = try await api.getValidToken()
                     await MainActor.run {
                         self.appRemote?.connectionParameters.accessToken = token
-                        self.appRemote?.authorizeAndPlayURI(uri)
+                        self.appRemote?.authorizeAndPlayURI(playURI)
                     }
                 } catch {
                     self.isOpeningSpotify = false
@@ -276,8 +303,8 @@ final class SpotifySDKService: NSObject, ObservableObject {
         }
 
         // Already connected — play normally.
-        // Cancel any pending open-timeout since we're already connected.
         openingSpotifyTimeoutTask?.cancel()
+        pendingResume = false
 
         if let position = position, position > 0 {
             pendingSeekURI = uri
@@ -287,8 +314,8 @@ final class SpotifySDKService: NSObject, ObservableObject {
             pendingSeekPosition = nil
         }
         
-        logger.info("Playing URI: \(uri, privacy: .public)")
-        appRemote?.playerAPI?.play(uri)
+        logger.info("Playing URI: \(playURI, privacy: .public)")
+        appRemote?.playerAPI?.play(playURI)
     }
 
     func pause() {
@@ -296,12 +323,18 @@ final class SpotifySDKService: NSObject, ObservableObject {
         appRemote?.playerAPI?.pause()
     }
 
+    /// Resumes playback. If the SDK is disconnected (e.g. after the ~30s timeout),
+    /// reconnects first and issues the resume in the connection callback.
     func resume() {
         logger.info("Resuming playback.")
-        if hasPauseTimeoutOccurred || !isConnected {
-            connect()
-        } else {
+        if isConnected {
             appRemote?.playerAPI?.resume()
+        } else {
+            // Mark that we want a resume as soon as we reconnect.
+            // The delegate shim's appRemoteDidEstablishConnection will pick this up.
+            pendingResume = true
+            hasPauseTimeoutOccurred = false
+            connect()
         }
     }
 

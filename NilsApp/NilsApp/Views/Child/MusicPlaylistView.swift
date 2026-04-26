@@ -128,7 +128,10 @@ struct MusicPlaylistView: View {
         )
         .contentShape(Rectangle())
         .onDebouncedTap {
-            playerViewModel.play(uri: track.uri, isLongForm: false)
+            // Pass the playlist URI as the context so Spotify queues the full playlist
+            // and auto-advances after each track — enabling continuous / gapless playback.
+            let contextURI = viewModel.playlists.first.map { "spotify:playlist:\($0.id)" }
+            playerViewModel.play(uri: track.uri, contextURI: contextURI, isLongForm: false)
         }
     }
 

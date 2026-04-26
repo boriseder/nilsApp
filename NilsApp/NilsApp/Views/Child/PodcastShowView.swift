@@ -166,7 +166,10 @@ struct PodcastShowView: View {
                 )
         )
         .onDebouncedTap {
-            playerViewModel.play(uri: episode.uri, isLongForm: true)
+            // Pass the show URI as the context so Spotify queues the full show and
+            // auto-advances to the next episode — enabling continuous playback.
+            let contextURI = viewModel.shows.first.map { "spotify:show:\($0.id)" }
+            playerViewModel.play(uri: episode.uri, contextURI: contextURI, isLongForm: true)
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: isPlaying)
     }
