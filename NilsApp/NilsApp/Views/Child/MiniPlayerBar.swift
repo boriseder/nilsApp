@@ -5,12 +5,9 @@ struct MiniPlayerBar: View {
     @EnvironmentObject var playerViewModel: PlayerViewModel
     @Binding var showNowPlayingSheet: Bool
 
-    // Scrubber drag state
     @State private var isDragging: Bool = false
     @State private var dragValue: TimeInterval = 0
     @State private var scrubDebounceTask: Task<Void, Never>?
-
-    // Upward-swipe lift state
     @State private var dragOffset: CGFloat = 0
 
     var body: some View {
@@ -52,11 +49,6 @@ struct MiniPlayerBar: View {
         }
     }
 
-    // MARK: - Scrubber
-    //
-    // Hidden while a timeout has occurred — scrubbing is meaningless without a
-    // live SDK connection, and the reconnect banner takes visual priority.
-
     private var scrubberRow: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
@@ -83,8 +75,7 @@ struct MiniPlayerBar: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
-                        // Do not allow scrubbing when disconnected.
-                        guard !playerViewModel.hasPauseTimeoutOccurred else { return }
+                        guard playerViewModel.isConnected && !playerViewModel.hasPauseTimeoutOccurred else { return }
                         isDragging = true
                         let fraction = max(0, min(1, value.location.x / geo.size.width))
                         dragValue = fraction * max(playerViewModel.trackDuration, 1)
@@ -99,7 +90,7 @@ struct MiniPlayerBar: View {
                         }
                     }
                     .onEnded { value in
-                        guard !playerViewModel.hasPauseTimeoutOccurred else { return }
+                        guard playerViewModel.isConnected && !playerViewModel.hasPauseTimeoutOccurred else { return }
                         let fraction = max(0, min(1, value.location.x / geo.size.width))
                         let position = fraction * max(playerViewModel.trackDuration, 1)
                         scrubDebounceTask?.cancel()
@@ -114,8 +105,7 @@ struct MiniPlayerBar: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDragging)
-        // Fade the scrubber out while disconnected so attention goes to the banner.
-        .opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 1.0)
+        .opacity(!playerViewModel.isConnected || playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 1.0)
         .animation(.easeInOut(duration: 0.2), value: playerViewModel.hasPauseTimeoutOccurred)
     }
 
@@ -124,8 +114,6 @@ struct MiniPlayerBar: View {
         let progress = isDragging ? dragValue : playerViewModel.currentProgress
         return totalWidth * CGFloat(max(0, min(1, progress / duration)))
     }
-
-    // MARK: - Album Art
 
     private var albumArt: some View {
         Group {
@@ -142,9 +130,7 @@ struct MiniPlayerBar: View {
         .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
-        // Dim album art when disconnected to reinforce the "paused/offline" state.
-        .opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.5 : 1.0)
-        .animation(.easeInOut(duration: 0.2), value: playerViewModel.hasPauseTimeoutOccurred)
+        .opacity(!playerViewModel.isConnected || playerViewModel.hasPauseTimeoutOccurred ? 0.5 : 1.0)
     }
 
     private var artPlaceholder: some View {
@@ -157,11 +143,6 @@ struct MiniPlayerBar: View {
             )
     }
 
-    // MARK: - Track Info
-    //
-    // When a timeout has occurred, a small "Tap to reconnect" label replaces the
-    // time-remaining readout so the child has an obvious affordance.
-
     private var trackInfo: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(playerViewModel.trackName ?? "Nichts läuft")
@@ -169,10 +150,7 @@ struct MiniPlayerBar: View {
                 .foregroundColor(.white)
                 .lineLimit(1)
 
-            if playerViewModel.hasPauseTimeoutOccurred {
-                // Reconnect hint — tapping the bar opens NowPlayingView which
-                // shows the full reconnect affordance with a large "Tap to Resume"
-                // button. This label tells the child where to tap.
+            if !playerViewModel.isConnected || playerViewModel.hasPauseTimeoutOccurred {
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 10, weight: .semibold))
@@ -196,35 +174,21 @@ struct MiniPlayerBar: View {
         }
     }
 
-    // MARK: - Controls
-    //
-    // The centre button adapts to three states:
-    //
-    //   • hasPauseTimeoutOccurred == true
-    //     → Reconnect icon (arrow.clockwise). Tapping calls resume(), which now
-    //       sets pendingResume = true and reconnects the SDK before playing.
-    //       The icon is amber/warm so it reads as "action needed" at a glance.
-    //
-    //   • isPlaying == true
-    //     → Standard pause icon.
-    //
-    //   • isPlaying == false (normal pause, SDK still connected)
-    //     → Standard play icon.
-
     private var controls: some View {
-        HStack(spacing: 8) {
+        // FIX: Button-Status basiert nun auf allgemeiner Verbindung
+        let isDisconnected = !playerViewModel.isConnected || playerViewModel.hasPauseTimeoutOccurred
+        
+        return HStack(spacing: 8) {
             DebouncedButton(action: { playerViewModel.previous() }) {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white.opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 0.85))
+                    .foregroundColor(.white.opacity(isDisconnected ? 0.3 : 0.85))
                     .frame(width: 36, height: 36)
             }
-            .disabled(playerViewModel.hasPauseTimeoutOccurred)
+            .disabled(isDisconnected)
 
-            // Centre button — reconnect / pause / play
             DebouncedButton(action: {
-                if playerViewModel.hasPauseTimeoutOccurred {
-                    // resume() in SpotifySDKService sets pendingResume and calls connect()
+                if isDisconnected {
                     playerViewModel.resume()
                 } else if playerViewModel.isPlaying {
                     playerViewModel.pause()
@@ -234,30 +198,29 @@ struct MiniPlayerBar: View {
             }) {
                 ZStack {
                     Circle()
-                        .fill(playerViewModel.hasPauseTimeoutOccurred
-                              ? Color(red: 1.0, green: 0.75, blue: 0.2) // amber — signals action needed
+                        .fill(isDisconnected
+                              ? Color(red: 1.0, green: 0.75, blue: 0.2)
                               : Color.white)
                         .frame(width: 46, height: 46)
                         .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
 
-                    centreButtonIcon
+                    centreButtonIcon(isDisconnected: isDisconnected)
                 }
             }
 
             DebouncedButton(action: { playerViewModel.next() }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white.opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 0.85))
+                    .foregroundColor(.white.opacity(isDisconnected ? 0.3 : 0.85))
                     .frame(width: 36, height: 36)
             }
-            .disabled(playerViewModel.hasPauseTimeoutOccurred)
+            .disabled(isDisconnected)
         }
     }
 
-    /// The icon inside the centre button, isolated so the animation target is minimal.
     @ViewBuilder
-    private var centreButtonIcon: some View {
-        if playerViewModel.hasPauseTimeoutOccurred {
+    private func centreButtonIcon(isDisconnected: Bool) -> some View {
+        if isDisconnected {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 17, weight: .bold))
                 .foregroundColor(.black)
@@ -269,16 +232,12 @@ struct MiniPlayerBar: View {
         }
     }
 
-    // MARK: - Background
-
     private var playerBackground: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 20)
                 .fill(.ultraThinMaterial)
-
             RoundedRectangle(cornerRadius: 20)
                 .fill(Color.black.opacity(0.55))
-
             RoundedRectangle(cornerRadius: 20)
                 .fill(
                     LinearGradient(
@@ -290,13 +249,10 @@ struct MiniPlayerBar: View {
                         endPoint: .bottomTrailing
                     )
                 )
-
             RoundedRectangle(cornerRadius: 20)
                 .stroke(Color.white.opacity(0.10), lineWidth: 1)
         }
     }
-
-    // MARK: - Helpers
 
     private func formatTime(_ time: TimeInterval) -> String {
         let t = max(0, Int(time))
