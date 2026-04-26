@@ -1,10 +1,11 @@
+// Views/Child Group
 import SwiftUI
 
 struct MiniPlayerBar: View {
     @EnvironmentObject var playerViewModel: PlayerViewModel
     @Binding var showNowPlayingSheet: Bool
 
-    // Scrubber drag state — mirrors NowPlayingView pattern from the fix-4 change
+    // Scrubber drag state
     @State private var isDragging: Bool = false
     @State private var dragValue: TimeInterval = 0
     @State private var scrubDebounceTask: Task<Void, Never>?
@@ -14,10 +15,7 @@ struct MiniPlayerBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // ── Interactive scrubber ──────────────────────────────────────────
             scrubberRow
-
-            // ── Main row: art · info · controls ──────────────────────────────
             HStack(spacing: 14) {
                 albumArt
                 trackInfo
@@ -33,7 +31,6 @@ struct MiniPlayerBar: View {
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .offset(y: dragOffset)
-        // simultaneousGesture prevents the DragGesture from swallowing taps (fix #5)
         .simultaneousGesture(
             DragGesture()
                 .onChanged { value in
@@ -56,28 +53,23 @@ struct MiniPlayerBar: View {
     }
 
     // MARK: - Scrubber
+    //
+    // Hidden while a timeout has occurred — scrubbing is meaningless without a
+    // live SDK connection, and the reconnect banner takes visual priority.
 
     private var scrubberRow: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                // Track
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.white.opacity(0.15))
                     .frame(height: 4)
 
-                // Filled portion
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.white.opacity(isDragging ? 1.0 : 0.75))
-                    .frame(
-                        width: filledWidth(in: geo.size.width),
-                        height: 4
-                    )
-                    .animation(
-                        isDragging ? nil : .linear(duration: 1),
-                        value: playerViewModel.currentProgress
-                    )
+                    .frame(width: filledWidth(in: geo.size.width), height: 4)
+                    .animation(isDragging ? nil : .linear(duration: 1),
+                               value: playerViewModel.currentProgress)
 
-                // Thumb — only visible while dragging
                 if isDragging {
                     Circle()
                         .fill(Color.white)
@@ -91,6 +83,8 @@ struct MiniPlayerBar: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        // Do not allow scrubbing when disconnected.
+                        guard !playerViewModel.hasPauseTimeoutOccurred else { return }
                         isDragging = true
                         let fraction = max(0, min(1, value.location.x / geo.size.width))
                         dragValue = fraction * max(playerViewModel.trackDuration, 1)
@@ -105,6 +99,7 @@ struct MiniPlayerBar: View {
                         }
                     }
                     .onEnded { value in
+                        guard !playerViewModel.hasPauseTimeoutOccurred else { return }
                         let fraction = max(0, min(1, value.location.x / geo.size.width))
                         let position = fraction * max(playerViewModel.trackDuration, 1)
                         scrubDebounceTask?.cancel()
@@ -119,6 +114,9 @@ struct MiniPlayerBar: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 16)
         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDragging)
+        // Fade the scrubber out while disconnected so attention goes to the banner.
+        .opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: playerViewModel.hasPauseTimeoutOccurred)
     }
 
     private func filledWidth(in totalWidth: CGFloat) -> CGFloat {
@@ -144,6 +142,9 @@ struct MiniPlayerBar: View {
         .frame(width: 52, height: 52)
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 3)
+        // Dim album art when disconnected to reinforce the "paused/offline" state.
+        .opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.5 : 1.0)
+        .animation(.easeInOut(duration: 0.2), value: playerViewModel.hasPauseTimeoutOccurred)
     }
 
     private var artPlaceholder: some View {
@@ -157,6 +158,9 @@ struct MiniPlayerBar: View {
     }
 
     // MARK: - Track Info
+    //
+    // When a timeout has occurred, a small "Tap to reconnect" label replaces the
+    // time-remaining readout so the child has an obvious affordance.
 
     private var trackInfo: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -165,7 +169,19 @@ struct MiniPlayerBar: View {
                 .foregroundColor(.white)
                 .lineLimit(1)
 
-            if playerViewModel.trackDuration > 0 {
+            if playerViewModel.hasPauseTimeoutOccurred {
+                // Reconnect hint — tapping the bar opens NowPlayingView which
+                // shows the full reconnect affordance with a large "Tap to Resume"
+                // button. This label tells the child where to tap.
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.75))
+                    Text("Antippen um fortzufahren")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.75))
+                }
+            } else if playerViewModel.trackDuration > 0 {
                 let remaining = max(0, playerViewModel.trackDuration - (isDragging ? dragValue : playerViewModel.currentProgress))
                 Text("-\(formatTime(remaining))")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
@@ -181,18 +197,36 @@ struct MiniPlayerBar: View {
     }
 
     // MARK: - Controls
+    //
+    // The centre button adapts to three states:
+    //
+    //   • hasPauseTimeoutOccurred == true
+    //     → Reconnect icon (arrow.clockwise). Tapping calls resume(), which now
+    //       sets pendingResume = true and reconnects the SDK before playing.
+    //       The icon is amber/warm so it reads as "action needed" at a glance.
+    //
+    //   • isPlaying == true
+    //     → Standard pause icon.
+    //
+    //   • isPlaying == false (normal pause, SDK still connected)
+    //     → Standard play icon.
 
     private var controls: some View {
         HStack(spacing: 8) {
             DebouncedButton(action: { playerViewModel.previous() }) {
                 Image(systemName: "backward.fill")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(.white.opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 0.85))
                     .frame(width: 36, height: 36)
             }
+            .disabled(playerViewModel.hasPauseTimeoutOccurred)
 
+            // Centre button — reconnect / pause / play
             DebouncedButton(action: {
-                if playerViewModel.isPlaying {
+                if playerViewModel.hasPauseTimeoutOccurred {
+                    // resume() in SpotifySDKService sets pendingResume and calls connect()
+                    playerViewModel.resume()
+                } else if playerViewModel.isPlaying {
                     playerViewModel.pause()
                 } else {
                     playerViewModel.resume()
@@ -200,23 +234,38 @@ struct MiniPlayerBar: View {
             }) {
                 ZStack {
                     Circle()
-                        .fill(Color.white)
+                        .fill(playerViewModel.hasPauseTimeoutOccurred
+                              ? Color(red: 1.0, green: 0.75, blue: 0.2) // amber — signals action needed
+                              : Color.white)
                         .frame(width: 46, height: 46)
                         .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 2)
 
-                    Image(systemName: playerViewModel.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.system(size: 17, weight: .bold))
-                        .foregroundColor(.black)
-                        .offset(x: playerViewModel.isPlaying ? 0 : 1.5)
+                    centreButtonIcon
                 }
             }
 
             DebouncedButton(action: { playerViewModel.next() }) {
                 Image(systemName: "forward.fill")
                     .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(.white.opacity(playerViewModel.hasPauseTimeoutOccurred ? 0.3 : 0.85))
                     .frame(width: 36, height: 36)
             }
+            .disabled(playerViewModel.hasPauseTimeoutOccurred)
+        }
+    }
+
+    /// The icon inside the centre button, isolated so the animation target is minimal.
+    @ViewBuilder
+    private var centreButtonIcon: some View {
+        if playerViewModel.hasPauseTimeoutOccurred {
+            Image(systemName: "arrow.clockwise")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundColor(.black)
+        } else {
+            Image(systemName: playerViewModel.isPlaying ? "pause.fill" : "play.fill")
+                .font(.system(size: 17, weight: .bold))
+                .foregroundColor(.black)
+                .offset(x: playerViewModel.isPlaying ? 0 : 1.5)
         }
     }
 

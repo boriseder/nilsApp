@@ -1,73 +1,128 @@
-//
-//  AdminViewModel.swift
-//  nilsApp
-//
-//  Created by Boris on 18/04/2026.
-//
-
+// Admin ViewModels Group
 import Foundation
 import Combine
 import os
-import SwiftUI // For @AppStorage
-import UIKit // Required for UIApplication
+import SwiftUI
+import UIKit
 
 /// ViewModel for the Admin area, handling PIN validation, content search, and curation.
 @MainActor
 final class AdminViewModel: ObservableObject {
+
     // MARK: - PIN Management
+
     @Published var isUnlocked: Bool = false
     @Published var pinError: Bool = false
-    
-    // Using AppStorage for simplicity in this scaffold. In a highly sensitive app,
-    // you might use the Keychain, but for a kid's walled garden, this is sufficient.
+
     @AppStorage("admin_pin") private var savedPIN: String = ""
-    
-    var isPINSetup: Bool {
-        !savedPIN.isEmpty
-    }
-    
-    // MARK: - Content Curation
+
+    var isPINSetup: Bool { !savedPIN.isEmpty }
+
+    // MARK: - Search Queries
+    //
+    // The view binds directly to these. The Combine pipelines in init() observe
+    // each query and fire the corresponding search after a 400 ms quiet period,
+    // so every keystroke does not trigger a network request.
+
     @Published var audiobookSearchQuery: String = ""
     @Published var musicSearchQuery: String = ""
     @Published var podcastSearchQuery: String = ""
-    
+
+    // MARK: - Search Results / State
+
     @Published private(set) var audiobookSearchResults: [CuratedArtist] = []
     @Published private(set) var musicSearchResults: [CuratedPlaylist] = []
     @Published private(set) var podcastSearchResults: [CuratedShow] = []
-    
+
+    @Published private(set) var isSearching: Bool = false
+    @Published private(set) var searchErrorMessage: String?
+
+    // MARK: - Curated Content
+
     @Published private(set) var curatedAudiobookSeries: [CuratedArtist] = []
     @Published private(set) var curatedMusicPlaylists: [CuratedPlaylist] = []
     @Published private(set) var curatedPodcastShows: [CuratedShow] = []
-    
-    @Published private(set) var isSearching: Bool = false
-    @Published private(set) var searchErrorMessage: String?
-    
+
+    // MARK: - Dependencies
+
     private let persistenceService: PersistenceService
-    let spotifyAPIService: SpotifyAPIService // Made internal for AdminView to access isAuthorized
+    let spotifyAPIService: SpotifyAPIService
     private let logger = Logger(subsystem: "com.nilsapp", category: "AdminViewModel")
     private var cancellables = Set<AnyCancellable>()
-    
+
+    // MARK: - Init
+
     init(persistenceService: PersistenceService, spotifyAPIService: SpotifyAPIService) {
         self.persistenceService = persistenceService
         self.spotifyAPIService = spotifyAPIService
-        
-        // Load initial curated content
+
+        // Seed curated lists from persisted content.
         self.curatedAudiobookSeries = persistenceService.curatedContent.audiobookSeries
-        self.curatedMusicPlaylists = persistenceService.curatedContent.musicPlaylists
-        self.curatedPodcastShows = persistenceService.curatedContent.podcastShows
-        
-        // Observe changes in curated content from persistence service
+        self.curatedMusicPlaylists  = persistenceService.curatedContent.musicPlaylists
+        self.curatedPodcastShows    = persistenceService.curatedContent.podcastShows
+
+        // Keep curated lists in sync when persistence changes externally.
         persistenceService.$curatedContent
             .sink { [weak self] content in
                 self?.curatedAudiobookSeries = content.audiobookSeries
-                self?.curatedMusicPlaylists = content.musicPlaylists
-                self?.curatedPodcastShows = content.podcastShows
+                self?.curatedMusicPlaylists  = content.musicPlaylists
+                self?.curatedPodcastShows    = content.podcastShows
+            }
+            .store(in: &cancellables)
+
+        // MARK: Debounced search pipelines
+        //
+        // Each pipeline:
+        //   1. Removes consecutive duplicates so typing the same character twice
+        //      does not fire a redundant request.
+        //   2. Waits 400 ms after the last keystroke before proceeding.
+        //      This is the debounce window — adjust if needed.
+        //   3. Receives on the main actor (safe for @Published mutation).
+        //   4. Clears results immediately when the query is emptied, without
+        //      waiting for the debounce window, so the UI feels responsive.
+
+        $audiobookSearchQuery
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] query in
+                guard let self else { return }
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.audiobookSearchResults = []
+                } else {
+                    self.executeSearch(query: query, category: .audiobooks)
+                }
+            }
+            .store(in: &cancellables)
+
+        $musicSearchQuery
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] query in
+                guard let self else { return }
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.musicSearchResults = []
+                } else {
+                    self.executeSearch(query: query, category: .music)
+                }
+            }
+            .store(in: &cancellables)
+
+        $podcastSearchQuery
+            .removeDuplicates()
+            .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
+            .sink { [weak self] query in
+                guard let self else { return }
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.podcastSearchResults = []
+                } else {
+                    self.executeSearch(query: query, category: .podcasts)
+                }
             }
             .store(in: &cancellables)
     }
-    
+
     // MARK: - PIN Actions
-    
+
     func setupPIN(_ pin: String) {
         guard pin.count >= 4 else {
             pinError = true
@@ -79,7 +134,7 @@ final class AdminViewModel: ObservableObject {
         pinError = false
         logger.info("Admin PIN set successfully.")
     }
-    
+
     func verifyPIN(_ pin: String) {
         if pin == savedPIN {
             isUnlocked = true
@@ -90,28 +145,25 @@ final class AdminViewModel: ObservableObject {
             logger.warning("Incorrect PIN entered.")
         }
     }
-    
+
     func lock() {
         isUnlocked = false
         pinError = false
-        audiobookSearchQuery = ""
-        musicSearchQuery = ""
-        podcastSearchQuery = ""
-        audiobookSearchResults = []
-        musicSearchResults = []
-        podcastSearchResults = []
+        clearSearch()
         logger.info("Admin area locked.")
     }
-    
+
     // MARK: - Spotify Authentication
-    
+
     func loginToSpotify() {
         if let authURL = spotifyAPIService.getAuthorizationURL() {
             UIApplication.shared.open(authURL)
         }
     }
-    
-    /// Clears all search results and queries.
+
+    // MARK: - Search
+
+    /// Clears all query strings and result sets.
     func clearSearch() {
         audiobookSearchQuery = ""
         musicSearchQuery = ""
@@ -120,17 +172,24 @@ final class AdminViewModel: ObservableObject {
         musicSearchResults = []
         podcastSearchResults = []
     }
-    
-    /// Performs a search based on the provided query and category.
+
+    /// Public entry point kept for compatibility with AdminSearchView's onSubmit handler.
+    /// Bypasses the debounce and fires immediately (useful for explicit keyboard submit).
     func performSearch(query: String, category: SearchCategory) {
-        guard !query.isEmpty else {
-            audiobookSearchResults = []
-            musicSearchResults = []
-            podcastSearchResults = []
-            return
-        }
+        executeSearch(query: query, category: category)
+    }
+
+    // MARK: - Private Search Execution
+    //
+    // A single method handles all three categories. Both the debounce pipelines
+    // above and the legacy performSearch() call through here, so there is one
+    // place to add error handling, logging, or rate-limit guards.
+
+    private func executeSearch(query: String, category: SearchCategory) {
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         isSearching = true
         searchErrorMessage = nil
+
         Task {
             do {
                 switch category {
@@ -148,103 +207,43 @@ final class AdminViewModel: ObservableObject {
             isSearching = false
         }
     }
-    
-    // MARK: - Individual Search Actions (can be deprecated if performSearch is used everywhere)
-    // MARK: - Search Actions
-    
-    func searchAudiobooks() {
-        guard !audiobookSearchQuery.isEmpty else {
-            audiobookSearchResults = []
-            return
-        }
-        isSearching = true
-        searchErrorMessage = nil
-        Task {
-            do {
-                audiobookSearchResults = try await spotifyAPIService.searchAudiobookSeries(query: audiobookSearchQuery)
-            } catch {
-                searchErrorMessage = "Search failed: \(error.localizedDescription)"
-                logger.error("Audiobook search failed: \(error.localizedDescription)")
-            }
-            isSearching = false
-        }
-    }
-    
-    func searchMusicPlaylists() {
-        guard !musicSearchQuery.isEmpty else {
-            musicSearchResults = []
-            return
-        }
-        isSearching = true
-        searchErrorMessage = nil
-        Task {
-            do {
-                musicSearchResults = try await spotifyAPIService.searchMusicPlaylists(query: musicSearchQuery)
-            } catch {
-                searchErrorMessage = "Search failed: \(error.localizedDescription)"
-                logger.error("Music playlist search failed: \(error.localizedDescription)")
-            }
-            isSearching = false
-        }
-    }
-    
-    func searchPodcastShows() {
-        guard !podcastSearchQuery.isEmpty else {
-            podcastSearchResults = []
-            return
-        }
-        isSearching = true
-        searchErrorMessage = nil
-        Task {
-            do {
-                podcastSearchResults = try await spotifyAPIService.searchPodcastShows(query: podcastSearchQuery)
-            } catch {
-                searchErrorMessage = "Search failed: \(error.localizedDescription)"
-                logger.error("Podcast show search failed: \(error.localizedDescription)")
-            }
-            isSearching = false
-        }
-    }
-    
+
     // MARK: - Curation Actions
-    
+
     func addAudiobookSeries(_ artist: CuratedArtist) {
-        if !curatedAudiobookSeries.contains(where: { $0.id == artist.id }) {
-            curatedAudiobookSeries.append(artist)
-            saveCuratedContent()
-            persistenceService.clearAlbumsCache() // Cache invalidieren
-        }
+        guard !curatedAudiobookSeries.contains(where: { $0.id == artist.id }) else { return }
+        curatedAudiobookSeries.append(artist)
+        saveCuratedContent()
+        persistenceService.clearAlbumsCache()
     }
-    
+
     func removeAudiobookSeries(at offsets: IndexSet) {
         curatedAudiobookSeries.remove(atOffsets: offsets)
         saveCuratedContent()
     }
-    
+
     func addMusicPlaylist(_ playlist: CuratedPlaylist) {
-        if !curatedMusicPlaylists.contains(where: { $0.id == playlist.id }) {
-            curatedMusicPlaylists.append(playlist)
-            saveCuratedContent()
-        }
+        guard !curatedMusicPlaylists.contains(where: { $0.id == playlist.id }) else { return }
+        curatedMusicPlaylists.append(playlist)
+        saveCuratedContent()
     }
-    
+
     func removeMusicPlaylist(at offsets: IndexSet) {
         curatedMusicPlaylists.remove(atOffsets: offsets)
         saveCuratedContent()
     }
-    
+
     func addPodcastShow(_ show: CuratedShow) {
-        if !curatedPodcastShows.contains(where: { $0.id == show.id }) {
-            curatedPodcastShows.append(show)
-            saveCuratedContent()
-        }
+        guard !curatedPodcastShows.contains(where: { $0.id == show.id }) else { return }
+        curatedPodcastShows.append(show)
+        saveCuratedContent()
     }
-    
+
     func removePodcastShow(at offsets: IndexSet) {
         curatedPodcastShows.remove(atOffsets: offsets)
         saveCuratedContent()
     }
-    
+
     private func saveCuratedContent() {
         let newContent = CuratedContent(
             audiobookSeries: curatedAudiobookSeries,
