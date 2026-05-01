@@ -25,12 +25,11 @@ final class PlaylistViewModel: ObservableObject {
         self.apiService = apiService
         self.persistenceService = persistenceService
 
-        // BUG 1 FIX: same pattern as AudiobookGridViewModel — compare before assigning.
+        // BUG 1 FIX: compare before assigning.
         guard self.playlists != playlists else {
             logger.debug("configure() — playlist list unchanged, skipping.")
             return
         }
-
         logger.info("configure() — playlist list changed, resetting tracks.")
         self.playlists = playlists
         self.tracks = []
@@ -61,15 +60,29 @@ final class PlaylistViewModel: ObservableObject {
             persistenceService.saveTracks(fetched, for: playlistIds)
             self.tracks = fetched
             logger.info("Fetched \(fetched.count) tracks from Spotify.")
+
+        } catch let partial as SpotifyAPIService.PartialTracksError {
+            // Save partial results to cache before showing error — same fix as audiobooks.
+            if !partial.tracks.isEmpty {
+                persistenceService.saveTracks(partial.tracks, for: playlistIds)
+                self.tracks = partial.tracks
+                logger.warning("Partial fetch: cached \(partial.tracks.count) tracks before showing rate-limit error.")
+            }
+            self.errorMessage = partial.retryAfter > 60
+                ? "Spotify needs a break. Saved what we found — try again later!"
+                : "Spotify needs a break. Try again in \(partial.retryAfter) seconds."
+
         } catch SpotifyAPIService.APIError.rateLimited(let retryAfter) {
             self.errorMessage = retryAfter > 60
-                ? "Spotify needs a break. Try again a little later!"
+                ? "Spotify needs a break. Try again later!"
                 : "Spotify needs a break. Try again in \(retryAfter) seconds."
             logger.error("Rate limited — retryAfter: \(retryAfter)s")
+
         } catch {
             self.errorMessage = "Failed to load music: \(error.localizedDescription)"
             logger.error("Failed to fetch tracks: \(error.localizedDescription)")
         }
+
         self.isLoading = false
     }
 }

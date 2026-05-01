@@ -5,7 +5,6 @@ import os
 import CryptoKit
 
 /// A native service to handle Spotify API calls.
-/// Handles OAuth PKCE authentication, automatic token refresh, and fetching metadata with pagination.
 @MainActor
 final class SpotifyAPIService: ObservableObject {
 
@@ -15,14 +14,10 @@ final class SpotifyAPIService: ObservableObject {
     private let logger = Logger(subsystem: "com.nilsapp", category: "SpotifyAPIService")
     private var codeVerifier: String = ""
     private var oauthState: String = ""
-
-    // Redundant Token Refresh Fix: Store an ongoing refresh task to coalesce multiple requests.
     private var refreshTask: Task<String, Error>?
 
     struct AuthState: Codable {
-        var accessToken: String
-        var refreshToken: String
-        var expirationDate: Date
+        var accessToken: String; var refreshToken: String; var expirationDate: Date
     }
     private var authState: AuthState?
 
@@ -32,83 +27,63 @@ final class SpotifyAPIService: ObservableObject {
         logger.debug("SpotifyAPIService initialized.")
         loadFromKeychain()
         if authState != nil {
-            // Initial optimistic check
             self.isAuthorized = authState?.expirationDate ?? .distantPast > Date()
             Task {
-                do {
-                    try await forceTokenRefresh()
-                    self.isAuthorized = true
-                    logger.info("Token refreshed on startup.")
-                } catch {
-                    logger.warning("Startup token refresh failed: \(error.localizedDescription)")
-                }
+                do { try await forceTokenRefresh(); self.isAuthorized = true; logger.info("Token refreshed on startup.") }
+                catch { logger.warning("Startup token refresh failed: \(error.localizedDescription)") }
             }
-        } else {
-            self.isAuthorized = false
-        }
+        } else { self.isAuthorized = false }
     }
 
     // MARK: - Authentication
 
     func getAuthorizationURL() -> URL? {
-        logger.info("Generating OAuth URL for Admin login.")
-        self.codeVerifier = generateCodeVerifier()
-        self.oauthState   = generateCodeVerifier()
+        self.codeVerifier = generateCodeVerifier(); self.oauthState = generateCodeVerifier()
         guard let verifierData = codeVerifier.data(using: .ascii) else { return nil }
-        let hash = SHA256.hash(data: verifierData)
-        let codeChallenge = base64URLEncode(Data(hash))
+        let codeChallenge = base64URLEncode(Data(SHA256.hash(data: verifierData)))
         var components = URLComponents(string: Constants.spotifyAuthorizeURL)!
         components.queryItems = [
-            URLQueryItem(name: "client_id",             value: Constants.spotifyClientId),
-            URLQueryItem(name: "response_type",         value: "code"),
-            URLQueryItem(name: "redirect_uri",          value: "\(Constants.spotifyRedirectURI)"),
-            URLQueryItem(name: "state",                 value: self.oauthState),
-            URLQueryItem(name: "scope",                 value: "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read playlist-read-private playlist-read-collaborative user-read-private user-read-email app-remote-control"),
+            URLQueryItem(name: "client_id", value: Constants.spotifyClientId),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "redirect_uri", value: "\(Constants.spotifyRedirectURI)"),
+            URLQueryItem(name: "state", value: self.oauthState),
+            URLQueryItem(name: "scope", value: "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read playlist-read-private playlist-read-collaborative user-read-private user-read-email app-remote-control"),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
-            URLQueryItem(name: "code_challenge",        value: codeChallenge)
+            URLQueryItem(name: "code_challenge", value: codeChallenge)
         ]
         return components.url
     }
 
     func handleRedirectURL(_ url: URL) async throws {
-        logger.info("Handling OAuth redirect URL.")
         guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let code  = components.queryItems?.first(where: { $0.name == "code" })?.value,
               let state = components.queryItems?.first(where: { $0.name == "state" })?.value,
               state == self.oauthState else { throw APIError.notAuthorized }
-        
         var request = URLRequest(url: URL(string: Constants.spotifyTokenURL)!)
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        let redirectURIEncoded = "\(Constants.spotifyRedirectURI)"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
-        request.httpBody = "client_id=\(Constants.spotifyClientId)&grant_type=authorization_code&code=\(code)&redirect_uri=\(redirectURIEncoded)&code_verifier=\(self.codeVerifier)".data(using: .utf8)
-        
+        let enc = "\(Constants.spotifyRedirectURI)".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        request.httpBody = "client_id=\(Constants.spotifyClientId)&grant_type=authorization_code&code=\(code)&redirect_uri=\(enc)&code_verifier=\(self.codeVerifier)".data(using: .utf8)
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             try handleTokenResponse(data: data, response: response)
             self.isAuthorized = true; self.requiresReauthentication = false
-            logger.info("OAuth redirect handled successfully.")
         } catch {
-            self.isAuthorized = false; self.requiresReauthentication = true
-            logger.error("OAuth redirect failed: \(error.localizedDescription)")
-            throw error
+            self.isAuthorized = false; self.requiresReauthentication = true; throw error
         }
     }
 
     // MARK: - Token Management
 
-    struct TokenResponse: Decodable {
-        let access_token: String; let refresh_token: String?; let expires_in: Int
-    }
+    struct TokenResponse: Decodable { let access_token: String; let refresh_token: String?; let expires_in: Int }
 
     private func handleTokenResponse(data: Data, response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else { throw APIError.notAuthorized }
         let tr = try JSONDecoder().decode(TokenResponse.self, from: data)
-        let expiration = Date().addingTimeInterval(TimeInterval(tr.expires_in - 60))
         let newRefresh = tr.refresh_token ?? self.authState?.refreshToken ?? ""
         guard !newRefresh.isEmpty else { throw APIError.notAuthorized }
-        self.authState = AuthState(accessToken: tr.access_token, refreshToken: newRefresh, expirationDate: expiration)
+        self.authState = AuthState(accessToken: tr.access_token, refreshToken: newRefresh,
+                                    expirationDate: Date().addingTimeInterval(TimeInterval(tr.expires_in - 60)))
         saveToKeychain()
     }
 
@@ -120,20 +95,14 @@ final class SpotifyAPIService: ObservableObject {
 
     @discardableResult
     func forceTokenRefresh() async throws -> String {
-        // Redundant Token Refresh Fix: Return the existing task if a refresh is already underway.
-        if let existingTask = refreshTask {
-            return try await existingTask.value
-        }
-
-        let newTask = Task<String, Error> {
+        if let existing = refreshTask { return try await existing.value }
+        let task = Task<String, Error> {
             defer { refreshTask = nil }
             guard let state = authState else { throw APIError.notAuthorized }
-            
             var request = URLRequest(url: URL(string: Constants.spotifyTokenURL)!)
             request.httpMethod = "POST"
             request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
             request.httpBody = "client_id=\(Constants.spotifyClientId)&grant_type=refresh_token&refresh_token=\(state.refreshToken)".data(using: .utf8)
-            
             do {
                 let (data, response) = try await URLSession.shared.data(for: request)
                 try handleTokenResponse(data: data, response: response)
@@ -144,9 +113,8 @@ final class SpotifyAPIService: ObservableObject {
                 deleteFromKeychain(); throw APIError.notAuthorized
             }
         }
-
-        self.refreshTask = newTask
-        return try await newTask.value
+        self.refreshTask = task
+        return try await task.value
     }
 
     // MARK: - Keychain
@@ -155,16 +123,17 @@ final class SpotifyAPIService: ObservableObject {
 
     private func saveToKeychain() {
         guard let data = try? JSONEncoder().encode(self.authState) else { return }
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: keychainKey]
-        if SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
-            var newItem = query; newItem[kSecValueData as String] = data; SecItemAdd(newItem as CFDictionary, nil)
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: keychainKey]
+        if SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
+            var n = q; n[kSecValueData as String] = data; SecItemAdd(n as CFDictionary, nil)
         }
     }
 
     private func loadFromKeychain() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: keychainKey, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: keychainKey,
+                                 kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
         var ref: AnyObject?
-        if SecItemCopyMatching(query as CFDictionary, &ref) == errSecSuccess, let data = ref as? Data {
+        if SecItemCopyMatching(q as CFDictionary, &ref) == errSecSuccess, let data = ref as? Data {
             self.authState = try? JSONDecoder().decode(AuthState.self, from: data)
             logger.info("Loaded Spotify auth from Keychain.")
         }
@@ -174,76 +143,64 @@ final class SpotifyAPIService: ObservableObject {
         SecItemDelete([kSecClass as String: kSecClassGenericPassword, kSecAttrAccount as String: keychainKey] as CFDictionary)
     }
 
-    // MARK: - Errors/Models for Fetching
+    // MARK: - Partial Result Error Types
+    //
+    // When Spotify returns a long Retry-After (> 30s) during a paginated fetch,
+    // we stop fetching but keep all results accumulated so far.
+    // We throw one of these typed errors so the ViewModel can:
+    //   1. Save the partial data to cache before surfacing the error to the UI.
+    //   2. On the next launch, get a cache hit — avoiding another rate-limited request.
+    //
+    // All three content types use this pattern so none can enter an infinite
+    // rate-limit loop. Previously only audiobooks had this protection.
 
-    struct PartialResultError: Error {
-        let albums: [SpotifyAlbum]
-        let retryAfter: Int
-    }
+    struct PartialAlbumsError: Error { let albums: [SpotifyAlbum]; let retryAfter: Int }
+    struct PartialTracksError: Error { let tracks: [SpotifyTrack]; let retryAfter: Int }
+    struct PartialEpisodesError: Error { let episodes: [SpotifyEpisode]; let retryAfter: Int }
 
     // MARK: - Data Fetching (Audiobooks)
 
     func fetchAudiobookAlbums(artistIds: [String]) async throws -> [SpotifyAlbum] {
         guard isAuthorized else { throw APIError.notAuthorized }
         var allAlbums: [SpotifyAlbum] = []
-        var longRateLimitRetryAfter: Int? = nil
+        var longWait: Int? = nil
 
         for artistId in artistIds {
-            if longRateLimitRetryAfter != nil { break }
-
+            if longWait != nil { break }
             let cleanId = artistId.trimmingCharacters(in: .whitespacesAndNewlines)
-            logger.info("Fetching albums for artist: \(cleanId)")
             var nextURL: String? = "\(Constants.spotifyArtistsBase)/\(cleanId)/albums?include_groups=album"
 
-            pageLoop: while let currentURLString = nextURL {
-                guard let url = URL(string: currentURLString) else { break }
-                let token = try await getValidToken()
+            pageLoop: while let urlString = nextURL {
+                guard let url = URL(string: urlString) else { break }
                 var request = URLRequest(url: url)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
                 var (data, response) = try await URLSession.shared.data(for: request)
-
                 if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                    let newToken = try await forceTokenRefresh()
-                    request.setValue("Bearer \(newToken)", forHTTPHeaderField: "Authorization")
+                    request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
                     (data, response) = try await URLSession.shared.data(for: request)
                 }
-
                 if let http = response as? HTTPURLResponse, http.statusCode == 429 {
                     let wait = Int(http.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if wait <= 30 {
-                        logger.warning("Rate limited — waiting \(wait)s.")
-                        try await Task.sleep(for: .seconds(wait))
-                        continue pageLoop
-                    } else {
-                        logger.error("Long rate limit (\(wait)s) for artist \(cleanId). Stopping fetch.")
-                        longRateLimitRetryAfter = wait
-                        break pageLoop
-                    }
+                    if wait <= 30 { try await Task.sleep(for: .seconds(wait)); continue pageLoop }
+                    logger.error("Long rate limit (\(wait)s) for artist \(cleanId).")
+                    longWait = wait; break pageLoop
                 }
-
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    throw APIError.httpError(statusCode: http.statusCode,
-                                             message: String(data: data, encoding: .utf8) ?? "Unknown Error")
+                    throw APIError.httpError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
                 }
-
                 struct R: Decodable { let items: [A?]?; let next: String? }
                 struct A: Decodable { let id: String?; let name: String?; let images: [I?]?; let uri: String? }
                 struct I: Decodable { let url: String? }
-
                 let decoded = try JSONDecoder().decode(R.self, from: data)
-                let page = (decoded.items ?? []).compactMap { a -> SpotifyAlbum? in
+                allAlbums.append(contentsOf: (decoded.items ?? []).compactMap { a -> SpotifyAlbum? in
                     guard let a, let id = a.id, let name = a.name, let uri = a.uri else { return nil }
-                    let imageURL = a.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) }
-                    return SpotifyAlbum(id: id, name: name, imageURL: imageURL, uri: uri)
-                }
-                allAlbums.append(contentsOf: page)
+                    return SpotifyAlbum(id: id, name: name, imageURL: a.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) }, uri: uri)
+                })
                 nextURL = decoded.next
             }
         }
-
-        if let wait = longRateLimitRetryAfter {
-            throw PartialResultError(albums: allAlbums, retryAfter: wait)
-        }
+        if let wait = longWait { throw PartialAlbumsError(albums: allAlbums, retryAfter: wait) }
+        logger.info("Fetched \(allAlbums.count) albums.")
         return allAlbums
     }
 
@@ -252,52 +209,55 @@ final class SpotifyAPIService: ObservableObject {
     func fetchPlaylistTracks(playlistIds: [String]) async throws -> [SpotifyTrack] {
         guard isAuthorized else { throw APIError.notAuthorized }
         var allTracks: [SpotifyTrack] = []
+        var longWait: Int? = nil
+
         for playlistId in playlistIds {
+            if longWait != nil { break }
             let cleanId = playlistId.trimmingCharacters(in: .whitespacesAndNewlines)
             var offset = 0; let limit = 100
-            while true {
-                let token = try await getValidToken()
+
+            pageLoop: while true {
                 var components = URLComponents(string: "\(Constants.spotifyPlaylistsBase)/\(cleanId)/items")!
                 components.queryItems = [URLQueryItem(name: "limit", value: "\(limit)"), URLQueryItem(name: "offset", value: "\(offset)")]
                 guard let url = components.url else { break }
                 var request = URLRequest(url: url)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
                 var (data, response) = try await URLSession.shared.data(for: request)
-                
                 if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                    let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+                    request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
                     (data, response) = try await URLSession.shared.data(for: request)
                 }
                 if let http = response as? HTTPURLResponse, http.statusCode == 429 {
                     let wait = Int(http.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if wait > 30 { throw APIError.rateLimited(retryAfter: wait) }
-                    try await Task.sleep(for: .seconds(wait)); continue
+                    if wait <= 30 { try await Task.sleep(for: .seconds(wait)); continue pageLoop }
+                    logger.error("Long rate limit (\(wait)s) for playlist \(cleanId).")
+                    longWait = wait; break pageLoop
                 }
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     if http.statusCode == 403 { logger.warning("403 for playlist \(cleanId). Skipping."); break }
                     throw APIError.httpError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
                 }
-                
                 struct R: Decodable { let items: [PI?]?; let next: String? }
                 struct PI: Decodable { let track: T?; let item: T? }
                 struct T: Decodable { let id: String?; let name: String?; let artists: [Ar?]?; let album: Al?; let uri: String?; let duration_ms: Int?; let explicit: Bool? }
                 struct Ar: Decodable { let name: String? }
                 struct Al: Decodable { let images: [Im?]? }
                 struct Im: Decodable { let url: String? }
-                
                 let decoded = try JSONDecoder().decode(R.self, from: data)
                 guard let items = decoded.items else { break }
                 allTracks.append(contentsOf: items.compactMap { li -> SpotifyTrack? in
                     guard let t = li?.track ?? li?.item, t.explicit != true,
                           let id = t.id, let name = t.name, let uri = t.uri else { return nil }
-                    let artist = t.artists?.compactMap { $0 }.first?.name ?? "Unknown Artist"
-                    let imageURL = t.album?.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) }
-                    return SpotifyTrack(id: id, name: name, artistName: artist, imageURL: imageURL, uri: uri, duration: TimeInterval(t.duration_ms ?? 0) / 1000.0)
+                    return SpotifyTrack(id: id, name: name, artistName: t.artists?.compactMap { $0 }.first?.name ?? "Unknown Artist",
+                                        imageURL: t.album?.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) },
+                                        uri: uri, duration: TimeInterval(t.duration_ms ?? 0) / 1000.0)
                 })
                 if decoded.next == nil || items.isEmpty { break }
                 offset += limit
             }
         }
+        if let wait = longWait { throw PartialTracksError(tracks: allTracks, retryAfter: wait) }
+        logger.info("Fetched \(allTracks.count) tracks.")
         return allTracks
     }
 
@@ -306,47 +266,52 @@ final class SpotifyAPIService: ObservableObject {
     func fetchPodcastEpisodes(showIds: [String]) async throws -> [SpotifyEpisode] {
         guard isAuthorized else { throw APIError.notAuthorized }
         var allEpisodes: [SpotifyEpisode] = []
+        var longWait: Int? = nil
+
         for showId in showIds {
+            if longWait != nil { break }
             let cleanId = showId.trimmingCharacters(in: .whitespacesAndNewlines)
             var showEpisodes: [SpotifyEpisode] = []; var offset = 0; let limit = 10
-            while true {
-                let token = try await getValidToken()
+
+            pageLoop: while true {
                 var components = URLComponents(string: "\(Constants.spotifyShowsBase)/\(cleanId)/episodes")!
                 components.queryItems = [URLQueryItem(name: "limit", value: "\(limit)"), URLQueryItem(name: "offset", value: "\(offset)"), URLQueryItem(name: "market", value: Constants.defaultMarket)]
                 guard let url = components.url else { break }
                 var request = URLRequest(url: url)
-                request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
                 var (data, response) = try await URLSession.shared.data(for: request)
-                
                 if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                    let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+                    request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
                     (data, response) = try await URLSession.shared.data(for: request)
                 }
                 if let http = response as? HTTPURLResponse, http.statusCode == 429 {
                     let wait = Int(http.value(forHTTPHeaderField: "Retry-After") ?? "5") ?? 5
-                    if wait > 30 { throw APIError.rateLimited(retryAfter: wait) }
-                    try await Task.sleep(for: .seconds(wait)); continue
+                    if wait <= 30 { try await Task.sleep(for: .seconds(wait)); continue pageLoop }
+                    logger.error("Long rate limit (\(wait)s) for show \(cleanId).")
+                    longWait = wait; break pageLoop
                 }
                 if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                     throw APIError.httpError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
                 }
-                
                 struct R: Decodable { let items: [E?]?; let next: String? }
                 struct E: Decodable { let id: String?; let name: String?; let description: String?; let images: [Im?]?; let uri: String?; let duration_ms: Int?; let release_date: String?; let explicit: Bool? }
                 struct Im: Decodable { let url: String? }
-                
                 let decoded = try JSONDecoder().decode(R.self, from: data)
                 guard let items = decoded.items else { break }
                 showEpisodes.append(contentsOf: items.compactMap { ep -> SpotifyEpisode? in
                     guard let e = ep, e.explicit != true, let id = e.id, let name = e.name, let uri = e.uri else { return nil }
-                    let imageURL = e.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) }
-                    return SpotifyEpisode(id: id, name: name, description: e.description ?? "", imageURL: imageURL, uri: uri, duration: TimeInterval(e.duration_ms ?? 0) / 1000.0, releaseDate: e.release_date?.convertedToDate())
+                    return SpotifyEpisode(id: id, name: name, description: e.description ?? "",
+                                          imageURL: e.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) },
+                                          uri: uri, duration: TimeInterval(e.duration_ms ?? 0) / 1000.0,
+                                          releaseDate: e.release_date?.convertedToDate())
                 })
                 if showEpisodes.count >= 3 || decoded.next == nil || items.isEmpty { break }
                 offset += limit
             }
             allEpisodes.append(contentsOf: showEpisodes.prefix(3))
         }
+        if let wait = longWait { throw PartialEpisodesError(episodes: allEpisodes, retryAfter: wait) }
+        logger.info("Fetched \(allEpisodes.count) episodes.")
         return allEpisodes
     }
 
@@ -354,76 +319,51 @@ final class SpotifyAPIService: ObservableObject {
 
     func searchAudiobookSeries(query: String) async throws -> [CuratedArtist] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        let token = try await getValidToken()
         var components = URLComponents(string: Constants.spotifySearch)!
         components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "type", value: "artist")]
         guard let url = components.url else { throw APIError.notAuthorized }
-        var request = URLRequest(url: url); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
         var (data, response) = try await URLSession.shared.data(for: request)
-        
         if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-            let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
             (data, response) = try await URLSession.shared.data(for: request)
         }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             if http.statusCode == 400 { return [] }
             throw APIError.httpError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
         }
-        
         struct R: Decodable { let artists: AP? }; struct AP: Decodable { let items: [A]? }
         struct A: Decodable { let id: String?; let name: String?; let images: [Im]? }; struct Im: Decodable { let url: String?; let width: Int? }
         return ((try JSONDecoder().decode(R.self, from: data)).artists?.items ?? []).compactMap { a in
             guard let id = a.id, let name = a.name else { return nil }
-            let imageURL = a.images?.max(by: { $0.width ?? 0 < $1.width ?? 0 })?.url.flatMap { URL(string: $0) }
-            return CuratedArtist(id: id, name: name, imageURL: imageURL)
+            return CuratedArtist(id: id, name: name, imageURL: a.images?.max(by: { $0.width ?? 0 < $1.width ?? 0 })?.url.flatMap { URL(string: $0) })
         }
     }
 
-    // Heavy Search Fix: Use Spotify Search API for specific queries instead of crawling the entire library.
     func searchMusicPlaylists(query: String) async throws -> [CuratedPlaylist] {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // If query is empty, return user's recent/all playlists by crawling library
-        if trimmedQuery.isEmpty {
-            return try await fetchAllUserPlaylists()
-        }
-
-        // For specific queries, use the /search endpoint to save bandwidth and rate limit quota
-        let token = try await getValidToken()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return try await fetchAllUserPlaylists() }
         var components = URLComponents(string: Constants.spotifySearch)!
-        components.queryItems = [
-            URLQueryItem(name: "q", value: trimmedQuery),
-            URLQueryItem(name: "type", value: "playlist"),
-            URLQueryItem(name: "limit", value: "20")
-        ]
-        
+        components.queryItems = [URLQueryItem(name: "q", value: trimmed), URLQueryItem(name: "type", value: "playlist"), URLQueryItem(name: "limit", value: "20")]
         guard let url = components.url else { throw APIError.notAuthorized }
         var request = URLRequest(url: url)
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        
+        request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
         let (data, response) = try await URLSession.shared.data(for: request)
-        
-        if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-            let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
-            let (retryData, retryResponse) = try await URLSession.shared.data(for: request)
-            return try parsePlaylistSearch(data: retryData, response: retryResponse)
-        }
-        
         return try parsePlaylistSearch(data: data, response: response)
     }
 
     private func fetchAllUserPlaylists() async throws -> [CuratedPlaylist] {
-        var allPlaylists: [CuratedPlaylist] = []; var offset = 0; let limit = 50
+        var all: [CuratedPlaylist] = []; var offset = 0; let limit = 50
         while true {
-            let token = try await getValidToken()
             var components = URLComponents(string: Constants.spotifyMyPlaylists)!
             components.queryItems = [URLQueryItem(name: "limit", value: "\(limit)"), URLQueryItem(name: "offset", value: "\(offset)")]
             guard let url = components.url else { break }
-            var request = URLRequest(url: url); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
             var (data, response) = try await URLSession.shared.data(for: request)
-            
             if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+                request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
                 (data, response) = try await URLSession.shared.data(for: request)
             }
             if let http = response as? HTTPURLResponse, http.statusCode == 429 {
@@ -434,28 +374,25 @@ final class SpotifyAPIService: ObservableObject {
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
                 throw APIError.httpError(statusCode: http.statusCode, message: String(data: data, encoding: .utf8) ?? "")
             }
-            
             struct R: Decodable { let items: [P?]?; let next: String? }; struct P: Decodable { let id: String?; let name: String?; let images: [Im?]? }; struct Im: Decodable { let url: String? }
             let decoded = try JSONDecoder().decode(R.self, from: data); let items = decoded.items ?? []
-            allPlaylists.append(contentsOf: items.compactMap { p -> CuratedPlaylist? in
+            all.append(contentsOf: items.compactMap { p -> CuratedPlaylist? in
                 guard let p, let id = p.id, let name = p.name else { return nil }
                 return CuratedPlaylist(id: id, name: name, imageURL: p.images?.compactMap { $0 }.first?.url.flatMap { URL(string: $0) })
             })
             if decoded.next == nil || items.isEmpty || items.count < limit { break }
             offset += limit
         }
-        return allPlaylists
+        return all
     }
 
     private func parsePlaylistSearch(data: Data, response: URLResponse) throws -> [CuratedPlaylist] {
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-             throw APIError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 500, message: "Search failed")
+            throw APIError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 500, message: "Search failed")
         }
         struct R: Decodable { let playlists: P? }; struct P: Decodable { let items: [I]? }
         struct I: Decodable { let id: String?; let name: String?; let images: [Im]? }; struct Im: Decodable { let url: String? }
-        
-        let decoded = try JSONDecoder().decode(R.self, from: data)
-        return (decoded.playlists?.items ?? []).compactMap { item in
+        return ((try JSONDecoder().decode(R.self, from: data)).playlists?.items ?? []).compactMap { item in
             guard let id = item.id, let name = item.name else { return nil }
             return CuratedPlaylist(id: id, name: name, imageURL: item.images?.first?.url.flatMap { URL(string: $0) })
         }
@@ -463,14 +400,14 @@ final class SpotifyAPIService: ObservableObject {
 
     func searchPodcastShows(query: String) async throws -> [CuratedShow] {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        let token = try await getValidToken()
         var components = URLComponents(string: Constants.spotifySearch)!
         components.queryItems = [URLQueryItem(name: "q", value: query), URLQueryItem(name: "type", value: "show")]
         guard let url = components.url else { throw APIError.notAuthorized }
-        var request = URLRequest(url: url); request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(try await getValidToken())", forHTTPHeaderField: "Authorization")
         var (data, response) = try await URLSession.shared.data(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-            let t = try await forceTokenRefresh(); request.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization")
+            request.setValue("Bearer \(try await forceTokenRefresh())", forHTTPHeaderField: "Authorization")
             (data, response) = try await URLSession.shared.data(for: request)
         }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -481,8 +418,7 @@ final class SpotifyAPIService: ObservableObject {
         struct S: Decodable { let id: String?; let name: String?; let images: [Im]? }; struct Im: Decodable { let url: String?; let width: Int? }
         return ((try JSONDecoder().decode(R.self, from: data)).shows?.items ?? []).compactMap { s in
             guard let id = s.id, let name = s.name else { return nil }
-            let imageURL = s.images?.max(by: { $0.width ?? 0 < $1.width ?? 0 })?.url.flatMap { URL(string: $0) }
-            return CuratedShow(id: id, name: name, imageURL: imageURL)
+            return CuratedShow(id: id, name: name, imageURL: s.images?.max(by: { $0.width ?? 0 < $1.width ?? 0 })?.url.flatMap { URL(string: $0) })
         }
     }
 
@@ -513,9 +449,7 @@ final class SpotifyAPIService: ObservableObject {
             switch self {
             case .notAuthorized: return "The app is not authorized. A grown-up needs to log in."
             case .httpError(let c, let m): return "Spotify API Error (\(c)): \(m)"
-            case .rateLimited(let w): return w > 60
-                ? "Spotify needs a break. Try again a little later!"
-                : "Spotify needs a break. Try again in \(w) seconds."
+            case .rateLimited(let w): return w > 60 ? "Spotify needs a break. Try again later!" : "Spotify needs a break. Try again in \(w) seconds."
             case .noNetwork: return "Oh no! The internet is hiding. Please ask a grown-up to check the Wi-Fi."
             }
         }

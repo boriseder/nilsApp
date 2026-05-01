@@ -25,12 +25,11 @@ final class PodcastViewModel: ObservableObject {
         self.apiService = apiService
         self.persistenceService = persistenceService
 
-        // BUG 1 FIX: same pattern as AudiobookGridViewModel.
+        // BUG 1 FIX: compare before assigning.
         guard self.shows != shows else {
             logger.debug("configure() — show list unchanged, skipping.")
             return
         }
-
         logger.info("configure() — show list changed, resetting episodes.")
         self.shows = shows
         self.episodes = []
@@ -61,15 +60,29 @@ final class PodcastViewModel: ObservableObject {
             persistenceService.saveEpisodes(fetched, for: showIds)
             self.episodes = fetched
             logger.info("Fetched \(fetched.count) episodes from Spotify.")
+
+        } catch let partial as SpotifyAPIService.PartialEpisodesError {
+            // Save partial results to cache before showing error — same fix as audiobooks.
+            if !partial.episodes.isEmpty {
+                persistenceService.saveEpisodes(partial.episodes, for: showIds)
+                self.episodes = partial.episodes
+                logger.warning("Partial fetch: cached \(partial.episodes.count) episodes before showing rate-limit error.")
+            }
+            self.errorMessage = partial.retryAfter > 60
+                ? "Spotify needs a break. Saved what we found — try again later!"
+                : "Spotify needs a break. Try again in \(partial.retryAfter) seconds."
+
         } catch SpotifyAPIService.APIError.rateLimited(let retryAfter) {
             self.errorMessage = retryAfter > 60
-                ? "Spotify needs a break. Try again a little later!"
+                ? "Spotify needs a break. Try again later!"
                 : "Spotify needs a break. Try again in \(retryAfter) seconds."
             logger.error("Rate limited — retryAfter: \(retryAfter)s")
+
         } catch {
             self.errorMessage = "Failed to load episodes: \(error.localizedDescription)"
             logger.error("Failed to fetch episodes: \(error.localizedDescription)")
         }
+
         self.isLoading = false
     }
 }

@@ -19,10 +19,6 @@ final class AdminViewModel: ObservableObject {
     var isPINSetup: Bool { !savedPIN.isEmpty }
 
     // MARK: - Search Queries
-    //
-    // The view binds directly to these. The Combine pipelines in init() observe
-    // each query and fire the corresponding search after a 400 ms quiet period,
-    // so every keystroke does not trigger a network request.
 
     @Published var audiobookSearchQuery: String = ""
     @Published var musicSearchQuery: String = ""
@@ -56,12 +52,10 @@ final class AdminViewModel: ObservableObject {
         self.persistenceService = persistenceService
         self.spotifyAPIService = spotifyAPIService
 
-        // Seed curated lists from persisted content.
         self.curatedAudiobookSeries = persistenceService.curatedContent.audiobookSeries
         self.curatedMusicPlaylists  = persistenceService.curatedContent.musicPlaylists
         self.curatedPodcastShows    = persistenceService.curatedContent.podcastShows
 
-        // Keep curated lists in sync when persistence changes externally.
         persistenceService.$curatedContent
             .sink { [weak self] content in
                 self?.curatedAudiobookSeries = content.audiobookSeries
@@ -70,27 +64,15 @@ final class AdminViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // MARK: Debounced search pipelines
-        //
-        // Each pipeline:
-        //   1. Removes consecutive duplicates so typing the same character twice
-        //      does not fire a redundant request.
-        //   2. Waits 400 ms after the last keystroke before proceeding.
-        //      This is the debounce window — adjust if needed.
-        //   3. Receives on the main actor (safe for @Published mutation).
-        //   4. Clears results immediately when the query is emptied, without
-        //      waiting for the debounce window, so the UI feels responsive.
-
+        // Debounced search pipelines — fire after 400ms of quiet per category.
         $audiobookSearchQuery
             .removeDuplicates()
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] query in
                 guard let self else { return }
-                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.audiobookSearchResults = []
-                } else {
-                    self.executeSearch(query: query, category: .audiobooks)
-                }
+                query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? (self.audiobookSearchResults = [])
+                    : self.executeSearch(query: query, category: .audiobooks)
             }
             .store(in: &cancellables)
 
@@ -99,11 +81,9 @@ final class AdminViewModel: ObservableObject {
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] query in
                 guard let self else { return }
-                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.musicSearchResults = []
-                } else {
-                    self.executeSearch(query: query, category: .music)
-                }
+                query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? (self.musicSearchResults = [])
+                    : self.executeSearch(query: query, category: .music)
             }
             .store(in: &cancellables)
 
@@ -112,11 +92,9 @@ final class AdminViewModel: ObservableObject {
             .debounce(for: .milliseconds(400), scheduler: RunLoop.main)
             .sink { [weak self] query in
                 guard let self else { return }
-                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    self.podcastSearchResults = []
-                } else {
-                    self.executeSearch(query: query, category: .podcasts)
-                }
+                query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? (self.podcastSearchResults = [])
+                    : self.executeSearch(query: query, category: .podcasts)
             }
             .store(in: &cancellables)
     }
@@ -124,32 +102,18 @@ final class AdminViewModel: ObservableObject {
     // MARK: - PIN Actions
 
     func setupPIN(_ pin: String) {
-        guard pin.count >= 4 else {
-            pinError = true
-            logger.warning("Attempted to set PIN less than 4 digits.")
-            return
-        }
-        savedPIN = pin
-        isUnlocked = true
-        pinError = false
-        logger.info("Admin PIN set successfully.")
+        guard pin.count >= 4 else { pinError = true; return }
+        savedPIN = pin; isUnlocked = true; pinError = false
+        logger.info("Admin PIN set.")
     }
 
     func verifyPIN(_ pin: String) {
-        if pin == savedPIN {
-            isUnlocked = true
-            pinError = false
-            logger.info("Admin PIN verified successfully.")
-        } else {
-            pinError = true
-            logger.warning("Incorrect PIN entered.")
-        }
+        if pin == savedPIN { isUnlocked = true; pinError = false }
+        else { pinError = true; logger.warning("Incorrect PIN.") }
     }
 
     func lock() {
-        isUnlocked = false
-        pinError = false
-        clearSearch()
+        isUnlocked = false; pinError = false; clearSearch()
         logger.info("Admin area locked.")
     }
 
@@ -163,42 +127,24 @@ final class AdminViewModel: ObservableObject {
 
     // MARK: - Search
 
-    /// Clears all query strings and result sets.
     func clearSearch() {
-        audiobookSearchQuery = ""
-        musicSearchQuery = ""
-        podcastSearchQuery = ""
-        audiobookSearchResults = []
-        musicSearchResults = []
-        podcastSearchResults = []
+        audiobookSearchQuery = ""; musicSearchQuery = ""; podcastSearchQuery = ""
+        audiobookSearchResults = []; musicSearchResults = []; podcastSearchResults = []
     }
 
-    /// Public entry point kept for compatibility with AdminSearchView's onSubmit handler.
-    /// Bypasses the debounce and fires immediately (useful for explicit keyboard submit).
     func performSearch(query: String, category: SearchCategory) {
         executeSearch(query: query, category: category)
     }
 
-    // MARK: - Private Search Execution
-    //
-    // A single method handles all three categories. Both the debounce pipelines
-    // above and the legacy performSearch() call through here, so there is one
-    // place to add error handling, logging, or rate-limit guards.
-
     private func executeSearch(query: String, category: SearchCategory) {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        isSearching = true
-        searchErrorMessage = nil
-
+        isSearching = true; searchErrorMessage = nil
         Task {
             do {
                 switch category {
-                case .audiobooks:
-                    audiobookSearchResults = try await spotifyAPIService.searchAudiobookSeries(query: query)
-                case .music:
-                    musicSearchResults = try await spotifyAPIService.searchMusicPlaylists(query: query)
-                case .podcasts:
-                    podcastSearchResults = try await spotifyAPIService.searchPodcastShows(query: query)
+                case .audiobooks: audiobookSearchResults = try await spotifyAPIService.searchAudiobookSeries(query: query)
+                case .music:      musicSearchResults     = try await spotifyAPIService.searchMusicPlaylists(query: query)
+                case .podcasts:   podcastSearchResults   = try await spotifyAPIService.searchPodcastShows(query: query)
                 }
             } catch {
                 searchErrorMessage = "Search failed: \(error.localizedDescription)"
@@ -214,12 +160,35 @@ final class AdminViewModel: ObservableObject {
         guard !curatedAudiobookSeries.contains(where: { $0.id == artist.id }) else { return }
         curatedAudiobookSeries.append(artist)
         saveCuratedContent()
-        persistenceService.clearAlbumsCache()
+
+        // RATE LIMIT FIX — do NOT call persistenceService.clearAlbumsCache() here.
+        //
+        // The old code called it unconditionally, nuking the cache for all artists
+        // whenever the parent added even one new series. On the next view, the app
+        // fetched every artist's full album catalog from scratch — potentially dozens
+        // or hundreds of API requests for large catalogs like TKKG, which triggered
+        // the 85,000-second rate limit.
+        //
+        // Why no explicit invalidation is needed:
+        //   - The PersistenceService cache is keyed on the sorted array of all
+        //     artist IDs currently in curatedContent.
+        //   - When the artist list changes (add or remove), the key changes.
+        //   - AudiobookGridViewModel.configure() detects the list change, resets
+        //     self.albums = [], and fetchAlbums() then calls loadAlbums(for: newIds)
+        //     which returns nil (cache miss) because the key no longer matches.
+        //   - A fresh API fetch runs automatically for only the new set of artists.
+        //   - Previously-fetched data is NOT re-fetched because the ViewModel fetches
+        //     all artists in one call; there is no per-artist cache to preserve.
+        //
+        // The net effect is identical correctness with zero unnecessary cache busting.
+        logger.info("Added audiobook series '\(artist.name)'. Cache self-invalidates on next fetch.")
     }
 
     func removeAudiobookSeries(at offsets: IndexSet) {
         curatedAudiobookSeries.remove(atOffsets: offsets)
         saveCuratedContent()
+        // Same rationale: the artist ID key changes → cache miss → fresh fetch.
+        // No clearAlbumsCache() needed.
     }
 
     func addMusicPlaylist(_ playlist: CuratedPlaylist) {
@@ -245,12 +214,11 @@ final class AdminViewModel: ObservableObject {
     }
 
     private func saveCuratedContent() {
-        let newContent = CuratedContent(
+        persistenceService.save(CuratedContent(
             audiobookSeries: curatedAudiobookSeries,
-            musicPlaylists: curatedMusicPlaylists,
-            podcastShows: curatedPodcastShows
-        )
-        persistenceService.save(newContent)
+            musicPlaylists:  curatedMusicPlaylists,
+            podcastShows:    curatedPodcastShows
+        ))
         logger.info("Curated content saved.")
     }
 }
