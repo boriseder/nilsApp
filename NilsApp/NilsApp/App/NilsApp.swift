@@ -54,36 +54,25 @@ struct NilsAppApp: App {
     var body: some Scene {
         WindowGroup {
             ZStack {
-                if showSplash {
-                    SplashView()
-                        .onAppear {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                                withAnimation(.easeInOut(duration: 0.5)) {
-                                    showSplash = false
-                                }
+                HomeView()
+                    .environmentObject(persistenceService)
+                    .environmentObject(spotifyAPIService)
+                    .environmentObject(spotifySDKService)
+                    .environmentObject(playerViewModel)
+                    .transition(.opacity)
+                    // Handle incoming URLs, specifically for Spotify OAuth redirects.
+                    .onOpenURL { url in
+                        self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
+                        if url.scheme == Constants.spotifyRedirectURI.scheme {
+                            // Sowohl OAuth als auch App Remote Callbacks abfangen
+                            if url.absoluteString.contains("code=") {
+                                // OAuth callback
+                                Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
                             }
+                            // App Remote verbindet sich automatisch nach dem Redirect
+                            self.spotifySDKService.connect()
                         }
-                } else {
-                    HomeView()
-                        .environmentObject(persistenceService)
-                        .environmentObject(spotifyAPIService)
-                        .environmentObject(spotifySDKService)
-                        .environmentObject(playerViewModel)
-                        .transition(.opacity)
-                        // Handle incoming URLs, specifically for Spotify OAuth redirects.
-                        .onOpenURL { url in
-                            self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
-                            if url.scheme == Constants.spotifyRedirectURI.scheme {
-                                // Sowohl OAuth als auch App Remote Callbacks abfangen
-                                if url.absoluteString.contains("code=") {
-                                    // OAuth callback
-                                    Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
-                                }
-                                // App Remote verbindet sich automatisch nach dem Redirect
-                                self.spotifySDKService.connect()
-                            }
-                        }
-                }
+                    }
             }
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
