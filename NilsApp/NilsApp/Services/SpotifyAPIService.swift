@@ -271,7 +271,7 @@ final class SpotifyAPIService: ObservableObject {
         for showId in showIds {
             if longWait != nil { break }
             let cleanId = showId.trimmingCharacters(in: .whitespacesAndNewlines)
-            var showEpisodes: [SpotifyEpisode] = []; var offset = 0; let limit = 10
+            var showEpisodes: [SpotifyEpisode] = []; var offset = 0; let limit = 3
 
             pageLoop: while true {
                 var components = URLComponents(string: "\(Constants.spotifyShowsBase)/\(cleanId)/episodes")!
