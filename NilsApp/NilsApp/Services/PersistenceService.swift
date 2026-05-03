@@ -74,13 +74,25 @@ final class PersistenceService: ObservableObject {
     // MARK: - Init
 
     init() {
+        // Resolve the document directory once as a plain local constant.
+        // This avoids calling the instance method fileURL(_:) before all stored
+        // properties are initialised — which is what caused the compiler error.
+        let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        // Helper used only inside this init — mirrors the instance loadCache<T> logic.
+        func readCache<T: Decodable>(_ file: String) -> Cache<T>? {
+            guard let data = try? Data(contentsOf: docDir.appendingPathComponent(file)) else { return nil }
+            return try? JSONDecoder().decode(Cache<T>.self, from: data)
+        }
+
         // Step 1: load curated content first — we need the IDs to validate caches.
-        var loaded = CuratedContent.empty
-        do {
-            let data = try Data(contentsOf: fileURL(fileName))
-            loaded = try JSONDecoder().decode(CuratedContent.self, from: data)
-        } catch {
+        let loaded: CuratedContent
+        if let data = try? Data(contentsOf: docDir.appendingPathComponent(fileName)),
+           let decoded = try? JSONDecoder().decode(CuratedContent.self, from: data) {
+            loaded = decoded
+        } else {
             // Not an error on first launch; empty content is the correct default.
+            loaded = .empty
         }
         self.curatedContent = loaded
 
@@ -95,24 +107,26 @@ final class PersistenceService: ObservableObject {
         let playlistIds = loaded.musicPlaylists.map(\.id)
         let showIds     = loaded.podcastShows.map(\.id)
 
+        let maxAge = 60.0 * 60.0 * 24.0   // 24 h — mirrors maxCacheAge below
+
         if !artistIds.isEmpty,
-           let cache: Cache<CodableAlbum> = Self.loadCacheSync(from: CacheFile.albums, fileURL: Self.makeFileURL(CacheFile.albums)),
+           let cache: Cache<CodableAlbum> = readCache(CacheFile.albums),
            cache.ids.sorted() == artistIds.sorted(),
-           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
             self.cachedAlbums = cache.items.map(\.model)
         }
 
         if !playlistIds.isEmpty,
-           let cache: Cache<CodableTrack> = Self.loadCacheSync(from: CacheFile.tracks, fileURL: Self.makeFileURL(CacheFile.tracks)),
+           let cache: Cache<CodableTrack> = readCache(CacheFile.tracks),
            cache.ids.sorted() == playlistIds.sorted(),
-           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
             self.cachedTracks = cache.items.map(\.model)
         }
 
         if !showIds.isEmpty,
-           let cache: Cache<CodableEpisode> = Self.loadCacheSync(from: CacheFile.episodes, fileURL: Self.makeFileURL(CacheFile.episodes)),
+           let cache: Cache<CodableEpisode> = readCache(CacheFile.episodes),
            cache.ids.sorted() == showIds.sorted(),
-           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
             self.cachedEpisodes = cache.items.map(\.model)
         }
     }
@@ -220,25 +234,4 @@ final class PersistenceService: ObservableObject {
             .appendingPathComponent(name)
     }
 
-    // MARK: - Static Helpers (used during init before `self` is fully available)
-    //
-    // Swift requires that stored properties are fully initialised before instance
-    // methods can be called. The three cache reads in init() happen after all
-    // stored properties are set, but using static helpers makes the dependency
-    // explicit and keeps the init body readable without a separate two-phase
-    // initialisation pattern.
-
-    private static func makeFileURL(_ name: String) -> URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(name)
-    }
-
-    private static func loadCacheSync<T: Decodable>(from file: String, fileURL: URL) -> Cache<T>? {
-        guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return try? JSONDecoder().decode(Cache<T>.self, from: data)
-    }
-
-    private static func isCacheValid<T>(_ cache: Cache<T>, maxAge: TimeInterval) -> Bool {
-        Date().timeIntervalSince(cache.fetchedAt) < maxAge
-    }
 }
