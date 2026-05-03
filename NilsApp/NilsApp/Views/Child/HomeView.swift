@@ -84,13 +84,23 @@ struct HomeView: View {
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.75), value: playerViewModel.currentTrackURI != nil)
         .onAppear {
-            configureViewModels()
+            configureAudiobooks()
+            configurePlaylists()
+            configurePodcasts()
             withAnimation(.spring(response: 0.7, dampingFraction: 0.8).delay(0.1)) {
                 appearAnimated = true
             }
         }
-        .onChange(of: persistenceService.curatedContent) { _, _ in
-            configureViewModels()
+        // Each observer fires only when its own slice of curated content changes,
+        // so at most one ViewModel's configure() is called per Admin edit.
+        .onChange(of: persistenceService.curatedContent.audiobookSeries) { _, _ in
+            configureAudiobooks()
+        }
+        .onChange(of: persistenceService.curatedContent.musicPlaylists) { _, _ in
+            configurePlaylists()
+        }
+        .onChange(of: persistenceService.curatedContent.podcastShows) { _, _ in
+            configurePodcasts()
         }
         .sheet(isPresented: $viewModel.showAdminArea) {
             PINEntryView(viewModel: AdminViewModel(
@@ -356,22 +366,27 @@ struct HomeView: View {
         }
     }
 
-    // MARK: - Configure
+    // MARK: - Configure (per category)
 
-    private func configureViewModels() {
-        let content = persistenceService.curatedContent
+    private func configureAudiobooks() {
         audiobookGridViewModel.configure(
-            artists: content.audiobookSeries,
+            artists: persistenceService.curatedContent.audiobookSeries,
             apiService: spotifyAPIService,
             persistenceService: persistenceService
         )
+    }
+
+    private func configurePlaylists() {
         playlistViewModel.configure(
-            playlists: content.musicPlaylists,
+            playlists: persistenceService.curatedContent.musicPlaylists,
             apiService: spotifyAPIService,
             persistenceService: persistenceService
         )
+    }
+
+    private func configurePodcasts() {
         podcastViewModel.configure(
-            shows: content.podcastShows,
+            shows: persistenceService.curatedContent.podcastShows,
             apiService: spotifyAPIService,
             persistenceService: persistenceService
         )
