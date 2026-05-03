@@ -64,9 +64,6 @@ final class PersistenceService: ObservableObject {
     }
 
     // MARK: - Cache file names
-    //
-    // Using constants here means a typo only lives in one place and is caught
-    // at compile time rather than causing a silent cache miss at runtime.
 
     private enum CacheFile {
         static let albums   = "cache_albums.json"
@@ -77,21 +74,50 @@ final class PersistenceService: ObservableObject {
     // MARK: - Init
 
     init() {
-        self.curatedContent = .empty
-        load()
-    }
-
-    // MARK: - Curated Content (unchanged public surface)
-
-    private func load() {
+        // Step 1: load curated content first — we need the IDs to validate caches.
+        var loaded = CuratedContent.empty
         do {
             let data = try Data(contentsOf: fileURL(fileName))
-            curatedContent = try JSONDecoder().decode(CuratedContent.self, from: data)
+            loaded = try JSONDecoder().decode(CuratedContent.self, from: data)
         } catch {
-            logger.warning("Could not load curated content: \(error.localizedDescription)")
-            curatedContent = .empty
+            // Not an error on first launch; empty content is the correct default.
+        }
+        self.curatedContent = loaded
+
+        // Step 2: eagerly pre-populate the three published cache properties so
+        // any view that binds to them sees real data immediately, without waiting
+        // for a ViewModel to call loadAlbums/Tracks/Episodes(for:).
+        //
+        // We derive the expected cache keys from the just-loaded curatedContent,
+        // which is identical to what the ViewModels will pass when they call the
+        // load* methods — so a valid cache file will always produce a hit here.
+        let artistIds   = loaded.audiobookSeries.map(\.id)
+        let playlistIds = loaded.musicPlaylists.map(\.id)
+        let showIds     = loaded.podcastShows.map(\.id)
+
+        if !artistIds.isEmpty,
+           let cache: Cache<CodableAlbum> = Self.loadCacheSync(from: CacheFile.albums, fileURL: Self.makeFileURL(CacheFile.albums)),
+           cache.ids.sorted() == artistIds.sorted(),
+           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+            self.cachedAlbums = cache.items.map(\.model)
+        }
+
+        if !playlistIds.isEmpty,
+           let cache: Cache<CodableTrack> = Self.loadCacheSync(from: CacheFile.tracks, fileURL: Self.makeFileURL(CacheFile.tracks)),
+           cache.ids.sorted() == playlistIds.sorted(),
+           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+            self.cachedTracks = cache.items.map(\.model)
+        }
+
+        if !showIds.isEmpty,
+           let cache: Cache<CodableEpisode> = Self.loadCacheSync(from: CacheFile.episodes, fileURL: Self.makeFileURL(CacheFile.episodes)),
+           cache.ids.sorted() == showIds.sorted(),
+           Self.isCacheValid(cache, maxAge: 60 * 60 * 24) {
+            self.cachedEpisodes = cache.items.map(\.model)
         }
     }
+
+    // MARK: - Curated Content
 
     func save(_ content: CuratedContent) {
         do {
@@ -104,7 +130,7 @@ final class PersistenceService: ObservableObject {
         }
     }
 
-    // MARK: - Albums Cache (public API unchanged)
+    // MARK: - Albums Cache
 
     func loadAlbums(for artistIds: [String]) -> [SpotifyAlbum]? {
         guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums),
@@ -127,7 +153,7 @@ final class PersistenceService: ObservableObject {
         logger.info("Albums cache cleared.")
     }
 
-    // MARK: - Tracks Cache (public API unchanged)
+    // MARK: - Tracks Cache
 
     func loadTracks(for playlistIds: [String]) -> [SpotifyTrack]? {
         guard let cache: Cache<CodableTrack> = loadCache(from: CacheFile.tracks),
@@ -150,7 +176,7 @@ final class PersistenceService: ObservableObject {
         logger.info("Tracks cache cleared.")
     }
 
-    // MARK: - Episodes Cache (public API unchanged)
+    // MARK: - Episodes Cache
 
     func loadEpisodes(for showIds: [String]) -> [SpotifyEpisode]? {
         guard let cache: Cache<CodableEpisode> = loadCache(from: CacheFile.episodes),
@@ -173,11 +199,7 @@ final class PersistenceService: ObservableObject {
         logger.info("Episodes cache cleared.")
     }
 
-    // MARK: - Generic Helpers
-    //
-    // These two methods replace six separate load*/save* implementations.
-    // Any future cacheable type (e.g. radio stations) gets persistence for free
-    // by adding only its Codable mirror and a thin public wrapper pair.
+    // MARK: - Generic Helpers (instance, used post-init)
 
     private func loadCache<T: Decodable>(from file: String) -> Cache<T>? {
         guard let data = try? Data(contentsOf: fileURL(file)) else { return nil }
@@ -196,5 +218,27 @@ final class PersistenceService: ObservableObject {
     private func fileURL(_ name: String) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(name)
+    }
+
+    // MARK: - Static Helpers (used during init before `self` is fully available)
+    //
+    // Swift requires that stored properties are fully initialised before instance
+    // methods can be called. The three cache reads in init() happen after all
+    // stored properties are set, but using static helpers makes the dependency
+    // explicit and keeps the init body readable without a separate two-phase
+    // initialisation pattern.
+
+    private static func makeFileURL(_ name: String) -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(name)
+    }
+
+    private static func loadCacheSync<T: Decodable>(from file: String, fileURL: URL) -> Cache<T>? {
+        guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        return try? JSONDecoder().decode(Cache<T>.self, from: data)
+    }
+
+    private static func isCacheValid<T>(_ cache: Cache<T>, maxAge: TimeInterval) -> Bool {
+        Date().timeIntervalSince(cache.fetchedAt) < maxAge
     }
 }
