@@ -76,7 +76,7 @@ struct MusicPlaylistView: View {
             // Album Art
             Group {
                 if let url = track.imageURL {
-                    AsyncImage(url: url) { image in
+                    CachedAsyncImage(url: url) { image in
                         image.resizable().aspectRatio(contentMode: .fill)
                     } placeholder: {
                         trackPlaceholder

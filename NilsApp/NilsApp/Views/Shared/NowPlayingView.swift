@@ -70,7 +70,7 @@ struct NowPlayingView: View {
     private var albumArtView: some View {
         Group {
             if let url = playerViewModel.trackImageURL {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fit)

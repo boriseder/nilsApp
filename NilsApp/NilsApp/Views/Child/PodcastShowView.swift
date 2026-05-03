@@ -53,7 +53,7 @@ struct PodcastShowView: View {
             ZStack(alignment: .bottomTrailing) {
                 Group {
                     if let url = episode.imageURL {
-                        AsyncImage(url: url) { image in
+                        CachedAsyncImage(url: url) { image in
                             image.resizable().aspectRatio(contentMode: .fill)
                         } placeholder: {
                             episodePlaceholder

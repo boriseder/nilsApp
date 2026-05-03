@@ -118,7 +118,7 @@ struct MiniPlayerBar: View {
     private var albumArt: some View {
         Group {
             if let url = playerViewModel.trackImageURL {
-                AsyncImage(url: url) { image in
+                CachedAsyncImage(url: url) { image in
                     image.resizable().aspectRatio(contentMode: .fill)
                 } placeholder: {
                     artPlaceholder

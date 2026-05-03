@@ -16,7 +16,7 @@ struct ItemTile: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            AsyncImage(url: imageURL) { image in
+            CachedAsyncImage(url: imageURL) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fit)
