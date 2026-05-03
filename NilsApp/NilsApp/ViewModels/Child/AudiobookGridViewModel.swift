@@ -13,6 +13,11 @@ final class AudiobookGridViewModel: ObservableObject {
     private var apiService: SpotifyAPIService?
     private var persistenceService: PersistenceService?
 
+    // Holds the isAuthorized subscription so it lives as long as the ViewModel.
+    // Stored here (not in a Set) so configure() can replace it cleanly when
+    // called again with a new apiService reference.
+    private var authCancellable: AnyCancellable?
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "AudiobookGridViewModel")
 
     init() {}
@@ -22,10 +27,14 @@ final class AudiobookGridViewModel: ObservableObject {
         apiService: SpotifyAPIService,
         persistenceService: PersistenceService
     ) {
-        self.apiService = apiService
         self.persistenceService = persistenceService
 
-        // BUG 1 FIX: compare BEFORE assigning — no isConfigured flag needed.
+        // Re-subscribe whenever the apiService reference changes (rare, but correct).
+        if self.apiService !== apiService {
+            self.apiService = apiService
+            subscribeToAuthorization(apiService)
+        }
+
         guard self.artists != artists else {
             logger.debug("configure() — artist list unchanged, skipping.")
             return
@@ -35,9 +44,24 @@ final class AudiobookGridViewModel: ObservableObject {
         self.albums = []
     }
 
+    /// Observes `isAuthorized` and fires a fetch the moment the token becomes
+    /// valid, but only when:
+    ///   • there are artists to fetch for (ViewModel is configured), and
+    ///   • we have no data yet (avoids redundant network calls when the user
+    ///     navigates back to a screen that already has albums loaded).
+    private func subscribeToAuthorization(_ apiService: SpotifyAPIService) {
+        authCancellable = apiService.$isAuthorized
+            .filter { $0 }                          // only the true transition
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard !self.artists.isEmpty else { return }
+                guard self.albums.isEmpty && !self.isLoading else { return }
+                self.logger.info("isAuthorized flipped true — triggering warm-up fetch.")
+                self.fetchAlbums()
+            }
+    }
+
     func fetchAlbums(forceRefresh: Bool = false) {
-        // BUG 2 mitigation: isLoading guard blocks the second concurrent call
-        // from HomeView.onAppear + AudiobookGridView.onAppear firing together.
         guard !isLoading else {
             logger.debug("fetchAlbums() — already loading, skipping duplicate call.")
             return
@@ -67,9 +91,6 @@ final class AudiobookGridViewModel: ObservableObject {
             logger.info("Fetched and cached \(fetched.count) albums from Spotify.")
 
         } catch let partial as SpotifyAPIService.PartialAlbumsError {
-            // BUG 3 FIX: Save whatever was collected before surfacing the error.
-            // This breaks the infinite rate-limit loop: the next launch gets a
-            // cache hit and makes zero API calls until the 24h TTL expires.
             if !partial.albums.isEmpty {
                 persistenceService.saveAlbums(partial.albums, for: artistIds)
                 self.albums = partial.albums

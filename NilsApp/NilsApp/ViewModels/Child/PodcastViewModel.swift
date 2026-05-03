@@ -13,6 +13,8 @@ final class PodcastViewModel: ObservableObject {
     private var apiService: SpotifyAPIService?
     private var persistenceService: PersistenceService?
 
+    private var authCancellable: AnyCancellable?
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "PodcastViewModel")
 
     init() {}
@@ -22,10 +24,13 @@ final class PodcastViewModel: ObservableObject {
         apiService: SpotifyAPIService,
         persistenceService: PersistenceService
     ) {
-        self.apiService = apiService
         self.persistenceService = persistenceService
 
-        // BUG 1 FIX: compare before assigning.
+        if self.apiService !== apiService {
+            self.apiService = apiService
+            subscribeToAuthorization(apiService)
+        }
+
         guard self.shows != shows else {
             logger.debug("configure() — show list unchanged, skipping.")
             return
@@ -33,6 +38,18 @@ final class PodcastViewModel: ObservableObject {
         logger.info("configure() — show list changed, resetting episodes.")
         self.shows = shows
         self.episodes = []
+    }
+
+    private func subscribeToAuthorization(_ apiService: SpotifyAPIService) {
+        authCancellable = apiService.$isAuthorized
+            .filter { $0 }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard !self.shows.isEmpty else { return }
+                guard self.episodes.isEmpty && !self.isLoading else { return }
+                self.logger.info("isAuthorized flipped true — triggering warm-up fetch.")
+                self.fetchEpisodes()
+            }
     }
 
     func fetchEpisodes(forceRefresh: Bool = false) {
@@ -62,7 +79,6 @@ final class PodcastViewModel: ObservableObject {
             logger.info("Fetched \(fetched.count) episodes from Spotify.")
 
         } catch let partial as SpotifyAPIService.PartialEpisodesError {
-            // Save partial results to cache before showing error — same fix as audiobooks.
             if !partial.episodes.isEmpty {
                 persistenceService.saveEpisodes(partial.episodes, for: showIds)
                 self.episodes = partial.episodes

@@ -13,6 +13,8 @@ final class PlaylistViewModel: ObservableObject {
     private var apiService: SpotifyAPIService?
     private var persistenceService: PersistenceService?
 
+    private var authCancellable: AnyCancellable?
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlaylistViewModel")
 
     init() {}
@@ -22,10 +24,13 @@ final class PlaylistViewModel: ObservableObject {
         apiService: SpotifyAPIService,
         persistenceService: PersistenceService
     ) {
-        self.apiService = apiService
         self.persistenceService = persistenceService
 
-        // BUG 1 FIX: compare before assigning.
+        if self.apiService !== apiService {
+            self.apiService = apiService
+            subscribeToAuthorization(apiService)
+        }
+
         guard self.playlists != playlists else {
             logger.debug("configure() — playlist list unchanged, skipping.")
             return
@@ -33,6 +38,18 @@ final class PlaylistViewModel: ObservableObject {
         logger.info("configure() — playlist list changed, resetting tracks.")
         self.playlists = playlists
         self.tracks = []
+    }
+
+    private func subscribeToAuthorization(_ apiService: SpotifyAPIService) {
+        authCancellable = apiService.$isAuthorized
+            .filter { $0 }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                guard !self.playlists.isEmpty else { return }
+                guard self.tracks.isEmpty && !self.isLoading else { return }
+                self.logger.info("isAuthorized flipped true — triggering warm-up fetch.")
+                self.fetchTracks()
+            }
     }
 
     func fetchTracks(forceRefresh: Bool = false) {
@@ -62,7 +79,6 @@ final class PlaylistViewModel: ObservableObject {
             logger.info("Fetched \(fetched.count) tracks from Spotify.")
 
         } catch let partial as SpotifyAPIService.PartialTracksError {
-            // Save partial results to cache before showing error — same fix as audiobooks.
             if !partial.tracks.isEmpty {
                 persistenceService.saveTracks(partial.tracks, for: playlistIds)
                 self.tracks = partial.tracks
