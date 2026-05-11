@@ -18,6 +18,11 @@ final class AudiobookGridViewModel: ObservableObject {
     // called again with a new apiService reference.
     private var authCancellable: AnyCancellable?
 
+    // FIX #2: Statt nur isLoading zu prüfen (was bei sehr schnellen Re-Renders
+    // noch false sein kann), halten wir den laufenden Task als Handle.
+    // cancel() vor dem neuen Start stellt sicher, dass nie zwei Tasks parallel laufen.
+    private var fetchTask: Task<Void, Never>?
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "AudiobookGridViewModel")
 
     init() {}
@@ -62,14 +67,16 @@ final class AudiobookGridViewModel: ObservableObject {
     }
 
     func fetchAlbums(forceRefresh: Bool = false) {
-        guard !isLoading else {
-            logger.debug("fetchAlbums() — already loading, skipping duplicate call.")
-            return
-        }
-        Task { await fetchAlbumsAsync(forceRefresh: forceRefresh) }
+        // FIX #2: Laufenden Task canceln bevor ein neuer startet — verhindert parallele
+        // Fetches auch wenn isLoading noch false ist (z.B. bei schnellem View-Re-Render).
+        fetchTask?.cancel()
+        fetchTask = Task { await fetchAlbumsAsync(forceRefresh: forceRefresh) }
     }
 
     func fetchAlbumsAsync(forceRefresh: Bool = false) async {
+        // FIX #2: Frühzeitig abbrechen wenn der Task bereits gecancelt wurde,
+        // bevor er überhaupt zur API-Abfrage kommt.
+        guard !Task.isCancelled else { return }
         guard !isLoading, let apiService, let persistenceService else { return }
         guard !artists.isEmpty else { return }
 

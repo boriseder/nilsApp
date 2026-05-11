@@ -18,7 +18,9 @@ import CryptoKit
 /// ─────
 ///   let image = await ImageCache.shared.image(for: url)
 ///
-final class ImageCache {
+// @unchecked Sendable: Thread-Safety wird manuell durch den seriellen `diskQueue`
+// sichergestellt — alle Mutationen auf Disk-State laufen ausschließlich dort durch.
+final class ImageCache: @unchecked Sendable {
 
     // MARK: - Singleton
 

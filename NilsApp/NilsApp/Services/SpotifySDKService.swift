@@ -2,7 +2,7 @@
 import Foundation
 import Combine
 import os
-import SpotifyiOS
+@preconcurrency import SpotifyiOS
 import Network
 
 // MARK: - Delegate Shim
@@ -109,6 +109,10 @@ extension SpotifyDelegateShim: SPTAppRemotePlayerStateDelegate {
 
 // MARK: - SpotifySDKService
 
+// @MainActor: alle Properties und Methoden laufen auf dem Main Actor.
+// Das ist korrekt, weil SpotifySDKService ein @Published-ObservableObject ist
+// und sämtliche SDK-Callbacks ohnehin über MainActor-Tasks zurückgeleitet werden.
+@MainActor
 final class SpotifySDKService: NSObject, ObservableObject {
 
     @Published fileprivate(set) var isConnected: Bool = false
@@ -131,8 +135,12 @@ final class SpotifySDKService: NSObject, ObservableObject {
     private var delegateShim: SpotifyDelegateShim?
     private weak var apiService: SpotifyAPIService?
     private var localNetworkBrowser: NWBrowser?
+    // FIX #1: Läuft auf @MainActor (Klassenebene) — guard + set in connect() sind atomar.
     private var isConnecting = false
     private var openingSpotifyTimeoutTask: Task<Void, Never>?
+    // FIX #4: Throttle für play() — verhindert separate SDK-Calls bei schnellen Mehrfach-Taps.
+    private var lastPlayTime: Date = .distantPast
+    private let playThrottleInterval: TimeInterval = 0.5
     
     init(apiService: SpotifyAPIService) {
         self.apiService = apiService
@@ -154,6 +162,8 @@ final class SpotifySDKService: NSObject, ObservableObject {
         triggerLocalNetworkPrivacyAlert()
     }
 
+    // FIX #1: Läuft auf @MainActor (Klassenebene) — guard + isConnecting = true sind atomar,
+    // kein zweiter Aufruf kann dazwischenfunken.
     func connect() {
         guard !isConnected, !isConnecting else {
             logger.debug("connect() ignored — already connected or connecting.")
@@ -163,11 +173,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
         logger.info("Attempting to connect to Spotify App...")
 
         Task {
-            defer {
-                Task { @MainActor in
-                    self.isConnecting = false
-                }
-            }
+            defer { self.isConnecting = false }
             do {
                 guard let api = apiService else {
                     logger.error("APIService is nil")
@@ -204,6 +210,15 @@ final class SpotifySDKService: NSObject, ObservableObject {
     }
 
     func play(uri: String, contextURI: String? = nil, fromPosition position: TimeInterval? = nil) {
+        // FIX #4: Throttle auf Service-Ebene — Aufrufe die schneller als playThrottleInterval
+        // eintreffen werden verworfen, egal ob DebouncedButton aktiv war oder nicht.
+        let now = Date()
+        guard now.timeIntervalSince(lastPlayTime) >= playThrottleInterval else {
+            logger.debug("play() throttled — called too quickly (\(String(format: "%.2f", now.timeIntervalSince(self.lastPlayTime)))s since last call).")
+            return
+        }
+        lastPlayTime = now
+
         // Um einen spezifischen Track in einer Playlist zu starten, übergeben wir die Track-URI.
         let playURI = uri
 
