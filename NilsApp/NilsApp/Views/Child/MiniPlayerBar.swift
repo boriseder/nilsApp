@@ -90,14 +90,19 @@ struct MiniPlayerBar: View {
                         }
                     }
                     .onEnded { value in
+                        // FIX 4: isDragging immer zurücksetzen — auch wenn der Guard fehlschlägt.
+                        // Sonst bleibt der Scrubber visuell im Drag-Modus stecken wenn die
+                        // Verbindung genau während eines Scrubs wegbricht.
+                        defer {
+                            withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
+                                isDragging = false
+                            }
+                        }
                         guard playerViewModel.isConnected && !playerViewModel.hasPauseTimeoutOccurred else { return }
                         let fraction = max(0, min(1, value.location.x / geo.size.width))
                         let position = fraction * max(playerViewModel.trackDuration, 1)
                         scrubDebounceTask?.cancel()
                         playerViewModel.scrub(to: position)
-                        withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
-                            isDragging = false
-                        }
                     }
             )
         }

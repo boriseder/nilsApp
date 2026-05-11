@@ -56,11 +56,15 @@ final class PlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // FIX 1: URI-Wechsel-Race — isPlaying und currentTrackURI gemeinsam subscriben.
+        // So enthält der Snapshot immer die URI die beim Pause-Event gültig war — nicht
+        // die möglicherweise bereits gewechselte URI des nächsten Tracks.
         sdkService.$isPlaying
             .removeDuplicates()
-            .sink { [weak self] playing in
-                guard let self = self, !playing else { return }
-                self.saveCurrentProgress()
+            .combineLatest(sdkService.$currentTrackURI)
+            .sink { [weak self] playing, uri in
+                guard let self = self, !playing, let uri else { return }
+                self.saveProgress(for: uri, position: self.currentProgress)
             }
             .store(in: &cancellables)
     }
@@ -93,13 +97,19 @@ final class PlayerViewModel: ObservableObject {
         currentProgress = time
         logger.info("Scrubbing to \(time)s.")
         sdkService.seek(to: time)
-        saveCurrentProgress()
+        // FIX 2: `time` direkt übergeben statt currentProgress zu lesen — macht die
+        // Reihenfolge explizit und ist unabhängig von Publisher-Update-Timing.
+        saveProgress(for: currentTrackURI, position: time)
     }
 
     private func saveCurrentProgress() {
-        guard let uri = currentTrackURI else { return }
-        guard currentProgress > 10.0 else { return }
-        UserDefaults.standard.set(currentProgress, forKey: progressCacheKeyPrefix + uri)
+        saveProgress(for: currentTrackURI, position: currentProgress)
+    }
+
+    private func saveProgress(for uri: String?, position: TimeInterval) {
+        guard let uri else { return }
+        guard position > 10.0 else { return }
+        UserDefaults.standard.set(position, forKey: progressCacheKeyPrefix + uri)
     }
 
     func previous() {

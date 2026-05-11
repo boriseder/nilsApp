@@ -120,12 +120,21 @@ struct NowPlayingView: View {
                             guard !Task.isCancelled else { return }
                             await MainActor.run {
                                 playerViewModel.scrub(to: newValue)
-                                isDragging = false
                             }
                         }
                     }
                 ),
-                in: 0...max(playerViewModel.trackDuration, 1)
+                in: 0...max(playerViewModel.trackDuration, 1),
+                // FIX 5: isDragging über onEditingChanged zurücksetzen — nicht nur im Task-Body.
+                // Ohne das bleibt isDragging = true wenn der letzte Task gecancelt wurde bevor
+                // er feuerte (z.B. bei sehr schnellem Tippen), und der Slider friert bei dragValue ein.
+                onEditingChanged: { editing in
+                    if !editing {
+                        scrubDebounceTask?.cancel()
+                        playerViewModel.scrub(to: dragValue)
+                        isDragging = false
+                    }
+                }
             )
             .accentColor(.primary)
 
