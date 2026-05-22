@@ -13,14 +13,7 @@ final class AudiobookGridViewModel: ObservableObject {
     private var apiService: SpotifyAPIService?
     private var persistenceService: PersistenceService?
 
-    // Holds the isAuthorized subscription so it lives as long as the ViewModel.
-    // Stored here (not in a Set) so configure() can replace it cleanly when
-    // called again with a new apiService reference.
     private var authCancellable: AnyCancellable?
-
-    // FIX #2: Statt nur isLoading zu prüfen (was bei sehr schnellen Re-Renders
-    // noch false sein kann), halten wir den laufenden Task als Handle.
-    // cancel() vor dem neuen Start stellt sicher, dass nie zwei Tasks parallel laufen.
     private var fetchTask: Task<Void, Never>?
 
     private let logger = Logger(subsystem: "com.nilsapp", category: "AudiobookGridViewModel")
@@ -34,7 +27,6 @@ final class AudiobookGridViewModel: ObservableObject {
     ) {
         self.persistenceService = persistenceService
 
-        // Re-subscribe whenever the apiService reference changes (rare, but correct).
         if self.apiService !== apiService {
             self.apiService = apiService
             subscribeToAuthorization(apiService)
@@ -49,14 +41,9 @@ final class AudiobookGridViewModel: ObservableObject {
         self.albums = []
     }
 
-    /// Observes `isAuthorized` and fires a fetch the moment the token becomes
-    /// valid, but only when:
-    ///   • there are artists to fetch for (ViewModel is configured), and
-    ///   • we have no data yet (avoids redundant network calls when the user
-    ///     navigates back to a screen that already has albums loaded).
     private func subscribeToAuthorization(_ apiService: SpotifyAPIService) {
         authCancellable = apiService.$isAuthorized
-            .filter { $0 }                          // only the true transition
+            .filter { $0 }
             .sink { [weak self] _ in
                 guard let self else { return }
                 guard !self.artists.isEmpty else { return }
@@ -67,21 +54,20 @@ final class AudiobookGridViewModel: ObservableObject {
     }
 
     func fetchAlbums(forceRefresh: Bool = false) {
-        // FIX #2: Laufenden Task canceln bevor ein neuer startet — verhindert parallele
-        // Fetches auch wenn isLoading noch false ist (z.B. bei schnellem View-Re-Render).
         fetchTask?.cancel()
         fetchTask = Task { await fetchAlbumsAsync(forceRefresh: forceRefresh) }
     }
 
     func fetchAlbumsAsync(forceRefresh: Bool = false) async {
-        // FIX #2: Frühzeitig abbrechen wenn der Task bereits gecancelt wurde,
-        // bevor er überhaupt zur API-Abfrage kommt.
         guard !Task.isCancelled else { return }
         guard !isLoading, let apiService, let persistenceService else { return }
         guard !artists.isEmpty else { return }
 
         let artistIds = artists.map { $0.id }
 
+        // ── Cache check ────────────────────────────────────────────────────────────
+        // On a normal (non-forced) launch, serve the cache immediately if it's valid.
+        // The delta fetch below will run on forceRefresh or when cache has expired.
         if !forceRefresh, let cached = persistenceService.loadAlbums(for: artistIds) {
             self.albums = cached
             logger.info("Albums served from cache (\(cached.count) items). No API call made.")
@@ -91,17 +77,28 @@ final class AudiobookGridViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
 
+        // ── Delta fetch ────────────────────────────────────────────────────────────
+        // Pass the known per-artist totals and the existing cached albums so the API
+        // service can skip artists whose total hasn't changed and only append new pages.
+        let knownTotals     = persistenceService.albumTotalCounts()
+        let existingAlbums  = persistenceService.loadAllCachedAlbums()
         do {
-            let fetched = try await apiService.fetchAudiobookAlbums(artistIds: artistIds)
-            persistenceService.saveAlbums(fetched, for: artistIds)
-            self.albums = fetched
-            logger.info("Fetched and cached \(fetched.count) albums from Spotify.")
+            let result = try await apiService.fetchAudiobookAlbums(
+                artistIds:      artistIds,
+                knownTotals:    knownTotals,
+                existingAlbums: existingAlbums
+            )
+            persistenceService.saveAlbums(result.albums, for: artistIds, totalCounts: result.totalCounts)
+            self.albums = result.albums
+            logger.info("Delta fetch complete — \(result.albums.count) albums total.")
 
         } catch let partial as SpotifyAPIService.PartialAlbumsError {
             if !partial.albums.isEmpty {
-                persistenceService.saveAlbums(partial.albums, for: artistIds)
+                // Save what we got with whatever totals we already knew.
+                // On next launch the delta will pick up where we left off.
+                persistenceService.saveAlbums(partial.albums, for: artistIds, totalCounts: knownTotals)
                 self.albums = partial.albums
-                logger.warning("Partial fetch: cached \(partial.albums.count) albums before showing rate-limit error.")
+                logger.warning("Partial fetch: saved \(partial.albums.count) albums before rate-limit.")
             }
             self.errorMessage = partial.retryAfter > 60
                 ? "Spotify needs a break. Saved what we found — try again later!"

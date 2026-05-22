@@ -16,28 +16,29 @@ final class PersistenceService: ObservableObject {
     @Published private(set) var cachedEpisodes: [SpotifyEpisode] = []
 
     private let fileName = "curated_content.json"
-    private let maxCacheAge: TimeInterval = 60 * 60 * 24 // 24 h
+
+    // Albums change rarely (weekly at best) — 7 days avoids redundant fetches.
+    // Tracks and episodes change more often — keep at 24h.
+    private let albumCacheAge:   TimeInterval = 60 * 60 * 24 * 7  // 7 days
+    private let defaultCacheAge: TimeInterval = 60 * 60 * 24      // 24 h
 
     private let logger = Logger(subsystem: "com.nilsapp", category: "PersistenceService")
 
     // MARK: - Generic Cache Envelope
     //
-    // A single Codable wrapper replaces the three near-identical AlbumsCache /
-    // TracksCache / EpisodesCache structs that existed before. `ids` is the set
-    // of Spotify IDs whose data was fetched; it is used to invalidate the cache
-    // when the parent adds or removes content in the Admin area.
+    // `totalCounts` maps each content ID (artistId / playlistId / showId) to the
+    // total item count that Spotify reported at the time of the last fetch.
+    // The delta-fetch logic uses this to detect new content without re-fetching
+    // existing pages: if Spotify's current total == our cached total, skip the fetch.
 
     private struct Cache<T: Codable>: Codable {
         let ids: [String]
         let items: [T]
         let fetchedAt: Date
+        let totalCounts: [String: Int]   // contentId → Spotify total at last fetch
     }
 
     // MARK: - Codable Mirrors
-    //
-    // SpotifyAlbum / SpotifyTrack / SpotifyEpisode are not Codable by design
-    // (they are transient UI models). These lightweight mirrors carry only the
-    // properties we need to persist, keeping the public model layer clean.
 
     private struct CodableAlbum: Codable {
         let id, name, uri: String
@@ -74,59 +75,45 @@ final class PersistenceService: ObservableObject {
     // MARK: - Init
 
     init() {
-        // Resolve the document directory once as a plain local constant.
-        // This avoids calling the instance method fileURL(_:) before all stored
-        // properties are initialised — which is what caused the compiler error.
         let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
-        // Helper used only inside this init — mirrors the instance loadCache<T> logic.
         func readCache<T: Decodable>(_ file: String) -> Cache<T>? {
             guard let data = try? Data(contentsOf: docDir.appendingPathComponent(file)) else { return nil }
             return try? JSONDecoder().decode(Cache<T>.self, from: data)
         }
 
-        // Step 1: load curated content first — we need the IDs to validate caches.
         let loaded: CuratedContent
-        if let data = try? Data(contentsOf: docDir.appendingPathComponent(fileName)),
+        if let data = try? Data(contentsOf: docDir.appendingPathComponent("curated_content.json")),
            let decoded = try? JSONDecoder().decode(CuratedContent.self, from: data) {
             loaded = decoded
         } else {
-            // Not an error on first launch; empty content is the correct default.
             loaded = .empty
         }
         self.curatedContent = loaded
 
-        // Step 2: eagerly pre-populate the three published cache properties so
-        // any view that binds to them sees real data immediately, without waiting
-        // for a ViewModel to call loadAlbums/Tracks/Episodes(for:).
-        //
-        // We derive the expected cache keys from the just-loaded curatedContent,
-        // which is identical to what the ViewModels will pass when they call the
-        // load* methods — so a valid cache file will always produce a hit here.
         let artistIds   = loaded.audiobookSeries.map(\.id)
         let playlistIds = loaded.musicPlaylists.map(\.id)
         let showIds     = loaded.podcastShows.map(\.id)
 
-        let maxAge = 60.0 * 60.0 * 24.0   // 24 h — mirrors maxCacheAge below
-
+        // Albums use the 7-day TTL on startup pre-population too.
         if !artistIds.isEmpty,
            let cache: Cache<CodableAlbum> = readCache(CacheFile.albums),
            cache.ids.sorted() == artistIds.sorted(),
-           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
+           Date().timeIntervalSince(cache.fetchedAt) < 60 * 60 * 24 * 7 {
             self.cachedAlbums = cache.items.map(\.model)
         }
 
         if !playlistIds.isEmpty,
            let cache: Cache<CodableTrack> = readCache(CacheFile.tracks),
            cache.ids.sorted() == playlistIds.sorted(),
-           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
+           Date().timeIntervalSince(cache.fetchedAt) < 60 * 60 * 24 {
             self.cachedTracks = cache.items.map(\.model)
         }
 
         if !showIds.isEmpty,
            let cache: Cache<CodableEpisode> = readCache(CacheFile.episodes),
            cache.ids.sorted() == showIds.sorted(),
-           Date().timeIntervalSince(cache.fetchedAt) < maxAge {
+           Date().timeIntervalSince(cache.fetchedAt) < 60 * 60 * 24 {
             self.cachedEpisodes = cache.items.map(\.model)
         }
     }
@@ -145,20 +132,43 @@ final class PersistenceService: ObservableObject {
     }
 
     // MARK: - Albums Cache
+    //
+    // Albums use delta-aware cache logic:
+    //   • loadAlbums(for:) returns cached albums if the ID set matches AND cache is < 7 days old.
+    //   • albumTotalCounts(for:) returns the per-artist totals stored at last fetch,
+    //     so the API layer can probe Spotify's current total and skip artists that haven't changed.
+    //   • saveAlbums(_:for:totalCounts:) persists both the albums and the new totals.
 
     func loadAlbums(for artistIds: [String]) -> [SpotifyAlbum]? {
         guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums),
               cache.ids.sorted() == artistIds.sorted(),
-              isValid(cache) else { return nil }
+              isValid(cache, maxAge: albumCacheAge) else { return nil }
         logger.info("Albums cache hit — \(cache.items.count) albums.")
         return cache.items.map(\.model)
     }
 
-    func saveAlbums(_ albums: [SpotifyAlbum], for artistIds: [String]) {
-        saveCache(Cache(ids: artistIds, items: albums.map(CodableAlbum.init), fetchedAt: Date()),
-                  to: CacheFile.albums)
+    /// Returns the per-artist total counts stored at the last successful fetch,
+    /// regardless of whether the current artist list has changed.
+    func albumTotalCounts() -> [String: Int] {
+        guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums) else { return [:] }
+        return cache.totalCounts
+    }
+
+    /// Returns all previously cached albums so the API service can merge them
+    /// with new delta data, even if the artist list just changed.
+    func loadAllCachedAlbums() -> [SpotifyAlbum] {
+        guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums) else { return [] }
+        return cache.items.map(\.model)
+    }
+
+    func saveAlbums(_ albums: [SpotifyAlbum], for artistIds: [String], totalCounts: [String: Int]) {
+        saveCache(
+            Cache(ids: artistIds, items: albums.map(CodableAlbum.init),
+                  fetchedAt: Date(), totalCounts: totalCounts),
+            to: CacheFile.albums
+        )
         cachedAlbums = albums
-        logger.info("Albums cache saved — \(albums.count) albums.")
+        logger.info("Albums cache saved — \(albums.count) albums, totals: \(totalCounts).")
     }
 
     func clearAlbumsCache() {
@@ -172,14 +182,17 @@ final class PersistenceService: ObservableObject {
     func loadTracks(for playlistIds: [String]) -> [SpotifyTrack]? {
         guard let cache: Cache<CodableTrack> = loadCache(from: CacheFile.tracks),
               cache.ids.sorted() == playlistIds.sorted(),
-              isValid(cache) else { return nil }
+              isValid(cache, maxAge: defaultCacheAge) else { return nil }
         logger.info("Tracks cache hit — \(cache.items.count) tracks.")
         return cache.items.map(\.model)
     }
 
     func saveTracks(_ tracks: [SpotifyTrack], for playlistIds: [String]) {
-        saveCache(Cache(ids: playlistIds, items: tracks.map(CodableTrack.init), fetchedAt: Date()),
-                  to: CacheFile.tracks)
+        saveCache(
+            Cache(ids: playlistIds, items: tracks.map(CodableTrack.init),
+                  fetchedAt: Date(), totalCounts: [:]),
+            to: CacheFile.tracks
+        )
         cachedTracks = tracks
         logger.info("Tracks cache saved — \(tracks.count) tracks.")
     }
@@ -195,14 +208,17 @@ final class PersistenceService: ObservableObject {
     func loadEpisodes(for showIds: [String]) -> [SpotifyEpisode]? {
         guard let cache: Cache<CodableEpisode> = loadCache(from: CacheFile.episodes),
               cache.ids.sorted() == showIds.sorted(),
-              isValid(cache) else { return nil }
+              isValid(cache, maxAge: defaultCacheAge) else { return nil }
         logger.info("Episodes cache hit — \(cache.items.count) episodes.")
         return cache.items.map(\.model)
     }
 
     func saveEpisodes(_ episodes: [SpotifyEpisode], for showIds: [String]) {
-        saveCache(Cache(ids: showIds, items: episodes.map(CodableEpisode.init), fetchedAt: Date()),
-                  to: CacheFile.episodes)
+        saveCache(
+            Cache(ids: showIds, items: episodes.map(CodableEpisode.init),
+                  fetchedAt: Date(), totalCounts: [:]),
+            to: CacheFile.episodes
+        )
         cachedEpisodes = episodes
         logger.info("Episodes cache saved — \(episodes.count) episodes.")
     }
@@ -213,7 +229,7 @@ final class PersistenceService: ObservableObject {
         logger.info("Episodes cache cleared.")
     }
 
-    // MARK: - Generic Helpers (instance, used post-init)
+    // MARK: - Generic Helpers
 
     private func loadCache<T: Decodable>(from file: String) -> Cache<T>? {
         guard let data = try? Data(contentsOf: fileURL(file)) else { return nil }
@@ -225,13 +241,12 @@ final class PersistenceService: ObservableObject {
         try? data.write(to: fileURL(file), options: [.atomic, .completeFileProtection])
     }
 
-    private func isValid<T>(_ cache: Cache<T>) -> Bool {
-        Date().timeIntervalSince(cache.fetchedAt) < maxCacheAge
+    private func isValid<T>(_ cache: Cache<T>, maxAge: TimeInterval) -> Bool {
+        Date().timeIntervalSince(cache.fetchedAt) < maxAge
     }
 
     private func fileURL(_ name: String) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(name)
     }
-
 }

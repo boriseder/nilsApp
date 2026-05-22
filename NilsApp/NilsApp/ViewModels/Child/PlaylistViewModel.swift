@@ -15,6 +15,10 @@ final class PlaylistViewModel: ObservableObject {
 
     private var authCancellable: AnyCancellable?
 
+    // FIX #2: Mirror AudiobookGridViewModel — hold a Task handle so we can cancel
+    // an in-flight fetch before starting a new one, preventing parallel requests.
+    private var fetchTask: Task<Void, Never>?
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlaylistViewModel")
 
     init() {}
@@ -53,11 +57,14 @@ final class PlaylistViewModel: ObservableObject {
     }
 
     func fetchTracks(forceRefresh: Bool = false) {
-        guard !isLoading else { return }
-        Task { await fetchTracksAsync(forceRefresh: forceRefresh) }
+        // FIX #2: Cancel any in-flight task before launching a new one.
+        fetchTask?.cancel()
+        fetchTask = Task { await fetchTracksAsync(forceRefresh: forceRefresh) }
     }
 
     func fetchTracksAsync(forceRefresh: Bool = false) async {
+        // FIX #2: Check cancellation before doing any work.
+        guard !Task.isCancelled else { return }
         guard !isLoading, let apiService, let persistenceService else { return }
         guard !playlists.isEmpty else { return }
 
