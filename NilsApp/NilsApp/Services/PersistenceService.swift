@@ -41,10 +41,10 @@ final class PersistenceService: ObservableObject {
     // MARK: - Codable Mirrors
 
     private struct CodableAlbum: Codable {
-        let id, name, uri: String
+        let id, name, uri, artistId: String
         let imageURL: URL?
-        init(_ m: SpotifyAlbum) { id = m.id; name = m.name; uri = m.uri; imageURL = m.imageURL }
-        var model: SpotifyAlbum { SpotifyAlbum(id: id, name: name, imageURL: imageURL, uri: uri) }
+        init(_ m: SpotifyAlbum) { id = m.id; name = m.name; uri = m.uri; imageURL = m.imageURL; artistId = m.artistId }
+        var model: SpotifyAlbum { SpotifyAlbum(id: id, name: name, imageURL: imageURL, uri: uri, artistId: artistId) }
     }
 
     private struct CodableTrack: Codable {
@@ -71,6 +71,11 @@ final class PersistenceService: ObservableObject {
         static let tracks   = "cache_tracks.json"
         static let episodes = "cache_episodes.json"
     }
+
+    // In-memory cache to avoid repeated disk reads + JSON decodes within a single session.
+    private var albumCacheInMemory:   Cache<CodableAlbum>?
+    private var trackCacheInMemory:   Cache<CodableTrack>?
+    private var episodeCacheInMemory: Cache<CodableEpisode>?
 
     // MARK: - Init
 
@@ -154,10 +159,12 @@ final class PersistenceService: ObservableObject {
 
     func loadAlbums(for artistIds: [String]) -> [SpotifyAlbum]? {
         guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums),
-              cache.ids.sorted() == artistIds.sorted(),
-              isValid(cache, maxAge: albumCacheAge) else { return nil }
-        logger.info("Albums cache hit — \(cache.items.count) albums.")
-        return cache.items.map(\.model)
+              isValid(cache, maxAge: albumCacheAge),
+              artistIds.allSatisfy({ cache.ids.contains($0) }) else { return nil }
+        let requested = Set(artistIds)
+        let filtered = cache.items.filter { requested.contains($0.artistId) }.map(\.model)
+        logger.info("Albums cache hit — \(filtered.count) albums for \(artistIds.count) artist(s).")
+        return filtered
     }
 
     /// Returns the per-artist total counts stored at the last successful fetch,
@@ -175,17 +182,19 @@ final class PersistenceService: ObservableObject {
     }
 
     func saveAlbums(_ albums: [SpotifyAlbum], for artistIds: [String], totalCounts: [String: Int]) {
-        saveCache(
-            Cache(ids: artistIds, items: albums.map(CodableAlbum.init),
-                  fetchedAt: Date(), totalCounts: totalCounts),
-            to: CacheFile.albums
-        )
+        // saveCache updates the in-memory copy synchronously before dispatching the disk
+        // write to a background task — so cachedAlbums and in-memory are always consistent
+        // even if the app is killed before the disk write completes.
+        let cache = Cache(ids: artistIds, items: albums.map(CodableAlbum.init),
+                          fetchedAt: Date(), totalCounts: totalCounts)
+        saveCache(cache, to: CacheFile.albums)
         cachedAlbums = albums
         logger.info("Albums cache saved — \(albums.count) albums, totals: \(totalCounts).")
     }
 
     func clearAlbumsCache() {
         try? FileManager.default.removeItem(at: fileURL(CacheFile.albums))
+        albumCacheInMemory = nil
         cachedAlbums = []
         logger.info("Albums cache cleared.")
     }
@@ -245,13 +254,25 @@ final class PersistenceService: ObservableObject {
     // MARK: - Generic Helpers
 
     private func loadCache<T: Decodable>(from file: String) -> Cache<T>? {
+        // Return in-memory copy if available — avoids repeated disk reads within a session.
+        if file == CacheFile.albums, let mem = albumCacheInMemory as? Cache<T> { return mem }
+        if file == CacheFile.tracks, let mem = trackCacheInMemory as? Cache<T> { return mem }
+        if file == CacheFile.episodes, let mem = episodeCacheInMemory as? Cache<T> { return mem }
         guard let data = try? Data(contentsOf: fileURL(file)) else { return nil }
-        return try? JSONDecoder().decode(Cache<T>.self, from: data)
+        let decoded = try? JSONDecoder().decode(Cache<T>.self, from: data)
+        // Warm the in-memory copy for future calls this session.
+        if file == CacheFile.albums { albumCacheInMemory = decoded as? Cache<CodableAlbum> }
+        if file == CacheFile.tracks { trackCacheInMemory = decoded as? Cache<CodableTrack> }
+        if file == CacheFile.episodes { episodeCacheInMemory = decoded as? Cache<CodableEpisode> }
+        return decoded
     }
 
     private func saveCache<T: Encodable>(_ cache: Cache<T>, to file: String) {
-        // Offloading this to a detached task as well to prevent the main thread from blocking
-        // during heavy pagination writes.
+        // Update in-memory copy immediately so subsequent reads in the same session are fresh.
+        if file == CacheFile.albums { albumCacheInMemory = cache as? Cache<CodableAlbum> }
+        if file == CacheFile.tracks { trackCacheInMemory = cache as? Cache<CodableTrack> }
+        if file == CacheFile.episodes { episodeCacheInMemory = cache as? Cache<CodableEpisode> }
+        // Persist to disk on a background thread.
         Task.detached(priority: .utility) {
             guard let data = try? JSONEncoder().encode(cache) else { return }
             let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(file)

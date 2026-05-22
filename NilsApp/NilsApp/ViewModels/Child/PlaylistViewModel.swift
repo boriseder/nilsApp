@@ -18,6 +18,8 @@ final class PlaylistViewModel: ObservableObject {
     // FIX #2: Mirror AudiobookGridViewModel — hold a Task handle so we can cancel
     // an in-flight fetch before starting a new one, preventing parallel requests.
     private var fetchTask: Task<Void, Never>?
+    /// Absolute date before which we must not hit the Spotify API (rate-limit backoff).
+    private var rateLimitedUntil: Date?
 
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlaylistViewModel")
 
@@ -68,6 +70,12 @@ final class PlaylistViewModel: ObservableObject {
         guard !isLoading, let apiService, let persistenceService else { return }
         guard !playlists.isEmpty else { return }
 
+        if let until = rateLimitedUntil, Date() < until {
+            let remaining = Int(until.timeIntervalSinceNow)
+            logger.warning("Rate-limit backoff active — \(remaining)s remaining. Skipping fetch.")
+            return
+        }
+
         let playlistIds = playlists.map { $0.id }
 
         if !forceRefresh, let cached = persistenceService.loadTracks(for: playlistIds) {
@@ -91,11 +99,13 @@ final class PlaylistViewModel: ObservableObject {
                 self.tracks = partial.tracks
                 logger.warning("Partial fetch: cached \(partial.tracks.count) tracks before showing rate-limit error.")
             }
+            rateLimitedUntil = Date().addingTimeInterval(TimeInterval(partial.retryAfter))
             self.errorMessage = partial.retryAfter > 60
                 ? "Spotify needs a break. Saved what we found — try again later!"
                 : "Spotify needs a break. Try again in \(partial.retryAfter) seconds."
 
         } catch SpotifyAPIService.APIError.rateLimited(let retryAfter) {
+            rateLimitedUntil = Date().addingTimeInterval(TimeInterval(retryAfter))
             self.errorMessage = retryAfter > 60
                 ? "Spotify needs a break. Try again later!"
                 : "Spotify needs a break. Try again in \(retryAfter) seconds."

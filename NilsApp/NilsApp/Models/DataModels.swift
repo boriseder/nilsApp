@@ -45,6 +45,8 @@ struct SpotifyAlbum: Identifiable, Hashable {
     let name: String
     let imageURL: URL?
     let uri: String
+    /// The Spotify Artist ID this album belongs to. Used to filter albums per artist.
+    let artistId: String
 }
 
 /// Represents a playable track fetched from a Spotify Playlist.
