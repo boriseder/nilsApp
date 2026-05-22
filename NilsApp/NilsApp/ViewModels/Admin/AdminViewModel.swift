@@ -45,6 +45,9 @@ final class AdminViewModel: ObservableObject {
     let spotifyAPIService: SpotifyAPIService
     private let logger = Logger(subsystem: "com.nilsapp", category: "AdminViewModel")
     private var cancellables = Set<AnyCancellable>()
+    
+    // OPTIMIZATION: Hold a reference to the active search task to prevent race conditions
+    private var searchTask: Task<Void, Never>?
 
     // MARK: - Init
 
@@ -128,6 +131,7 @@ final class AdminViewModel: ObservableObject {
     // MARK: - Search
 
     func clearSearch() {
+        searchTask?.cancel()
         audiobookSearchQuery = ""; musicSearchQuery = ""; podcastSearchQuery = ""
         audiobookSearchResults = []; musicSearchResults = []; podcastSearchResults = []
     }
@@ -139,7 +143,10 @@ final class AdminViewModel: ObservableObject {
     private func executeSearch(query: String, category: SearchCategory) {
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         isSearching = true; searchErrorMessage = nil
-        Task {
+        
+        searchTask?.cancel() // Cancel the previous inflight search
+        
+        searchTask = Task {
             do {
                 switch category {
                 case .audiobooks: audiobookSearchResults = try await spotifyAPIService.searchAudiobookSeries(query: query)
@@ -147,10 +154,13 @@ final class AdminViewModel: ObservableObject {
                 case .podcasts:   podcastSearchResults   = try await spotifyAPIService.searchPodcastShows(query: query)
                 }
             } catch {
+                guard !Task.isCancelled else { return } // Ignore error if we deliberately cancelled it
                 searchErrorMessage = "Search failed: \(error.localizedDescription)"
                 logger.error("Search for \(category.rawValue) failed: \(error.localizedDescription)")
             }
-            isSearching = false
+            if !Task.isCancelled {
+                isSearching = false
+            }
         }
     }
 

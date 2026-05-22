@@ -121,13 +121,25 @@ final class PersistenceService: ObservableObject {
     // MARK: - Curated Content
 
     func save(_ content: CuratedContent) {
-        do {
-            let data = try JSONEncoder().encode(content)
-            try data.write(to: fileURL(fileName), options: [.atomic, .completeFileProtection])
-            curatedContent = content
-            logger.info("Successfully saved curated content to disk.")
-        } catch {
-            logger.error("Failed to save curated content: \(error.localizedDescription)")
+        // Optimistically update the published state immediately so the UI reacts
+        self.curatedContent = content
+        
+        // Background the heavy JSON encoding and disk write so it doesn't block the Main Thread
+        Task.detached(priority: .utility) {
+            do {
+                let data = try JSONEncoder().encode(content)
+                // Use a local copy of fileURL logic to avoid accessing MainActor state
+                let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("curated_content.json")
+                try data.write(to: url, options: [.atomic, .completeFileProtection])
+                
+                Task { @MainActor in
+                    self.logger.info("Successfully saved curated content to disk.")
+                }
+            } catch {
+                Task { @MainActor in
+                    self.logger.error("Failed to save curated content: \(error.localizedDescription)")
+                }
+            }
         }
     }
 
@@ -135,9 +147,10 @@ final class PersistenceService: ObservableObject {
     //
     // Albums use delta-aware cache logic:
     //   • loadAlbums(for:) returns cached albums if the ID set matches AND cache is < 7 days old.
-    //   • albumTotalCounts(for:) returns the per-artist totals stored at last fetch,
+    //   • albumTotalCounts() returns the per-artist totals stored at last fetch,
     //     so the API layer can probe Spotify's current total and skip artists that haven't changed.
-    //   • saveAlbums(_:for:totalCounts:) persists both the albums and the new totals.
+    //   • loadAllCachedAlbums() returns whatever the cache currently holds so the API
+    //     can append deltas without losing previously fetched data.
 
     func loadAlbums(for artistIds: [String]) -> [SpotifyAlbum]? {
         guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums),
@@ -153,7 +166,7 @@ final class PersistenceService: ObservableObject {
         guard let cache: Cache<CodableAlbum> = loadCache(from: CacheFile.albums) else { return [:] }
         return cache.totalCounts
     }
-
+    
     /// Returns all previously cached albums so the API service can merge them
     /// with new delta data, even if the artist list just changed.
     func loadAllCachedAlbums() -> [SpotifyAlbum] {
@@ -237,8 +250,13 @@ final class PersistenceService: ObservableObject {
     }
 
     private func saveCache<T: Encodable>(_ cache: Cache<T>, to file: String) {
-        guard let data = try? JSONEncoder().encode(cache) else { return }
-        try? data.write(to: fileURL(file), options: [.atomic, .completeFileProtection])
+        // Offloading this to a detached task as well to prevent the main thread from blocking
+        // during heavy pagination writes.
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(cache) else { return }
+            let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(file)
+            try? data.write(to: url, options: [.atomic, .completeFileProtection])
+        }
     }
 
     private func isValid<T>(_ cache: Cache<T>, maxAge: TimeInterval) -> Bool {

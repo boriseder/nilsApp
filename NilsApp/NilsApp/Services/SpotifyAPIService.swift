@@ -406,7 +406,7 @@ final class SpotifyAPIService: ObservableObject {
             let cleanId = showId.trimmingCharacters(in: .whitespacesAndNewlines)
             var showEpisodes: [SpotifyEpisode] = []
             var offset = 0
-            let limit  = 50   // fetch 50 at a time; filter explicit client-side
+            let limit  = 10   // fetch 50 at a time; filter explicit client-side
 
             pageLoop: while true {
                 var components = URLComponents(string: "\(Constants.spotifyShowsBase)/\(cleanId)/episodes")!

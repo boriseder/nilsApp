@@ -1,6 +1,5 @@
 // Services Group
 import UIKit
-import CryptoKit
 
 /// A lightweight two-level image cache (memory + disk).
 ///
@@ -96,10 +95,12 @@ final class ImageCache: @unchecked Sendable {
 
     /// A short, filesystem-safe string derived from the URL.
     private func cacheKey(for url: URL) -> String {
-        // SHA256 → hex gives a fixed-length, collision-free, safe filename.
-        let data   = Data(url.absoluteString.utf8)
-        let digest = SHA256.hash(data: data)
-        return digest.map { String(format: "%02x", $0) }.joined()
+        // Base64 is significantly faster for the CPU than SHA256 during rapid scrolling
+        let base64 = url.absoluteString.data(using: .utf8)?.base64EncodedString() ?? ""
+        return base64
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private func diskURL(for key: String) -> URL {
