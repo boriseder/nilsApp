@@ -23,6 +23,8 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
             service.isConnected = true
             service.hasPauseTimeoutOccurred = false
             service.isOpeningSpotify = false
+            service.connectionRetryTask?.cancel()
+            service.connectionRetryTask = nil
             service.logger.info("Spotify App Remote connected.")
             appRemote.playerAPI?.delegate = self
             appRemote.playerAPI?.subscribe(toPlayerState: { (_, error) in
@@ -61,12 +63,23 @@ extension SpotifyDelegateShim: SPTAppRemoteDelegate {
 
     func appRemote(_ appRemote: SPTAppRemote, didFailConnectionAttemptWithError error: Error?) {
         Task { @MainActor [weak service] in
-            service?.isConnected = false
-            service?.isOpeningSpotify = false
-            service?.pendingResume = false
-            // FIX: UI-Status auf Reconnect setzen, wenn die Verbindung fehlschlägt
-            service?.hasPauseTimeoutOccurred = true
-            service?.logger.error("SDK connection failed: \(error?.localizedDescription ?? "no error")")
+            guard let service else { return }
+            service.isConnected = false
+            service.isOpeningSpotify = false
+            service.pendingResume = false
+            service.hasPauseTimeoutOccurred = true
+            service.logger.error("SDK connection failed: \(error?.localizedDescription ?? "no error")")
+            // Schedule a retry — Spotify may not have been in the foreground yet.
+            // Cancel any existing retry before scheduling a new one.
+            service.connectionRetryTask?.cancel()
+            service.connectionRetryTask = Task {
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    service.logger.info("Retrying connection to Spotify...")
+                    service.connect()
+                }
+            }
         }
     }
 
@@ -137,6 +150,7 @@ final class SpotifySDKService: NSObject, ObservableObject {
     private var localNetworkBrowser: NWBrowser?
     // FIX #1: Läuft auf @MainActor (Klassenebene) — guard + set in connect() sind atomar.
     private var isConnecting = false
+    var connectionRetryTask: Task<Void, Never>?
     private var openingSpotifyTimeoutTask: Task<Void, Never>?
     // FIX #4: Throttle für play() — verhindert separate SDK-Calls bei schnellen Mehrfach-Taps.
     private var lastPlayTime: Date = .distantPast

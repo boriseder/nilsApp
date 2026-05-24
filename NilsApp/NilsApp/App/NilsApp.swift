@@ -1,6 +1,6 @@
 // App Group
 import SwiftUI
-import os // Import os for Logger
+import os
 
 /// AppDelegate is used here strictly to enforce the Landscape orientation lock programmatically.
 /// This ensures a stable, media-focused experience for the child and prevents accidental rotations.
@@ -9,83 +9,64 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         supportedInterfaceOrientationsFor window: UIWindow?
     ) -> UIInterfaceOrientationMask {
-        // Lock the entire app to landscape (left and right)
         return .landscape
     }
 }
 
 @main
 struct NilsAppApp: App {
-    // Connect the AppDelegate to the SwiftUI lifecycle
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    
-    // Observe the app's lifecycle state (foreground/background)
     @Environment(\.scenePhase) private var scenePhase
-    
+
     private let logger = Logger(subsystem: "com.nilsapp", category: "NilsAppApp")
-    
+
     // MARK: - Core Services
     @StateObject private var persistenceService: PersistenceService
     @StateObject private var spotifyAPIService: SpotifyAPIService
     @StateObject private var spotifySDKService: SpotifySDKService
-    
+
     // MARK: - Shared ViewModels
     @StateObject private var playerViewModel: PlayerViewModel
-    
-    @State private var showSplash = true
-    
+
     init() {
-        // 1. Erstelle die Basis-Instanzen
-            let api = SpotifyAPIService()
-            let sdk = SpotifySDKService(apiService: api)
-            let persistence = PersistenceService()
-            
-            // 2. Initialisiere die StateObjects EINMALIG mit diesen Instanzen
-            _spotifyAPIService = StateObject(wrappedValue: api)
-            _spotifySDKService = StateObject(wrappedValue: sdk)
-            _persistenceService = StateObject(wrappedValue: persistence)
-            
-            // 3. PlayerViewModel nutzt das bereits erstellte sdk
-            _playerViewModel = StateObject(wrappedValue: PlayerViewModel(sdkService: sdk))
-            
-            // WICHTIG: Keine weiteren Zuweisungen an _spotifyAPIService danach!
+        // Activate the UIApplication.openURL swizzle so the Spotify SDK's
+        // authorizeAndPlayURI works on iOS 26 (deprecated openURL returns false otherwise).
+        _ = UIApplication.patchSpotifySDK
+
+        let api         = SpotifyAPIService()
+        let sdk         = SpotifySDKService(apiService: api)
+        let persistence = PersistenceService()
+
+        _spotifyAPIService = StateObject(wrappedValue: api)
+        _spotifySDKService = StateObject(wrappedValue: sdk)
+        _persistenceService = StateObject(wrappedValue: persistence)
+        _playerViewModel = StateObject(wrappedValue: PlayerViewModel(sdkService: sdk))
     }
 
     var body: some Scene {
         WindowGroup {
-            ZStack {
-                HomeView()
-                    .environmentObject(persistenceService)
-                    .environmentObject(spotifyAPIService)
-                    .environmentObject(spotifySDKService)
-                    .environmentObject(playerViewModel)
-                    .transition(.opacity)
-                    // Handle incoming URLs, specifically for Spotify OAuth redirects.
-                    .onOpenURL { url in
-                        self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
-                        if url.scheme == Constants.spotifyRedirectURI.scheme {
-                            // Sowohl OAuth als auch App Remote Callbacks abfangen
-                            if url.absoluteString.contains("code=") {
-                                // OAuth callback
-                                Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
-                            }
-                            // App Remote verbindet sich automatisch nach dem Redirect
-                            self.spotifySDKService.connect()
+            HomeView()
+                .environmentObject(persistenceService)
+                .environmentObject(spotifyAPIService)
+                .environmentObject(spotifySDKService)
+                .environmentObject(playerViewModel)
+                .onOpenURL { url in
+                    self.logger.info("Received URL: \(url.absoluteString, privacy: .public)")
+                    if url.scheme == Constants.spotifyRedirectURI.scheme {
+                        if url.absoluteString.contains("code=") {
+                            Task { try? await self.spotifyAPIService.handleRedirectURL(url) }
                         }
+                        self.spotifySDKService.connect()
                     }
-            }
+                }
         }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
+        .onChange(of: scenePhase) { _, newPhase in
             switch newPhase {
             case .active:
-                // Reconnect to the Spotify App Remote SDK when coming to the foreground
                 spotifySDKService.connect()
             case .background:
-                // Disconnect to clean up resources when fully backgrounded
                 spotifySDKService.disconnect()
             case .inactive:
-                // Do nothing. Disconnecting on inactive (e.g., pulling down Control Center) 
-                // drops the connection prematurely and interrupts the child's experience.
                 break
             default:
                 break

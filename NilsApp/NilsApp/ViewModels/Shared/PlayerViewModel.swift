@@ -18,7 +18,7 @@ final class PlayerViewModel: ObservableObject {
     // Status für die UI
     @Published private(set) var isConnected: Bool = false
     @Published private(set) var hasPauseTimeoutOccurred: Bool = false
-    
+
     private let sdkService: SpotifySDKService
     private let logger = Logger(subsystem: "com.nilsapp", category: "PlayerViewModel")
     private var cancellables = Set<AnyCancellable>()
@@ -56,9 +56,8 @@ final class PlayerViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
-        // FIX 1: URI-Wechsel-Race — isPlaying und currentTrackURI gemeinsam subscriben.
-        // So enthält der Snapshot immer die URI die beim Pause-Event gültig war — nicht
-        // die möglicherweise bereits gewechselte URI des nächsten Tracks.
+        // URI-Wechsel-Race — isPlaying und currentTrackURI gemeinsam subscriben.
+        // So enthält der Snapshot immer die URI die beim Pause-Event gültig war.
         sdkService.$isPlaying
             .removeDuplicates()
             .combineLatest(sdkService.$currentTrackURI)
@@ -70,20 +69,25 @@ final class PlayerViewModel: ObservableObject {
     }
 
     func play(uri: String, contextURI: String? = nil, isLongForm: Bool) {
-        if isLongForm {
-            let savedProgress = UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
-            if savedProgress > 0 {
-                logger.info("Found local playback cache for \(uri, privacy: .public) at \(savedProgress)s.")
-                sdkService.play(uri: uri, contextURI: contextURI, fromPosition: savedProgress)
-            } else {
-                sdkService.play(uri: uri, contextURI: contextURI)
-            }
+        let savedProgress = isLongForm
+            ? UserDefaults.standard.double(forKey: progressCacheKeyPrefix + uri)
+            : 0
+
+        // Optimistically update UI immediately so the MiniPlayer appears right away.
+        // The SDK's playerStateDidChange will overwrite these with real values once
+        // the App Remote connects — but the child sees a response on first tap.
+        currentTrackURI = contextURI ?? uri
+        isPlaying = true
+        currentProgress = savedProgress
+
+        if savedProgress > 0 {
+            logger.info("Found local playback cache for \(uri, privacy: .public) at \(savedProgress)s.")
+            sdkService.play(uri: uri, contextURI: contextURI, fromPosition: savedProgress)
         } else {
-            // Track URI und Playlist Context werden an den Service gereicht
             sdkService.play(uri: uri, contextURI: contextURI)
         }
     }
-    
+
     func pause() {
         guard isConnected else { return }
         sdkService.pause()
@@ -97,8 +101,6 @@ final class PlayerViewModel: ObservableObject {
         currentProgress = time
         logger.info("Scrubbing to \(time)s.")
         sdkService.seek(to: time)
-        // FIX 2: `time` direkt übergeben statt currentProgress zu lesen — macht die
-        // Reihenfolge explizit und ist unabhängig von Publisher-Update-Timing.
         saveProgress(for: currentTrackURI, position: time)
     }
 

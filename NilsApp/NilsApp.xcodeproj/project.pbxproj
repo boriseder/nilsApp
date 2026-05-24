@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A13E80F52F9411D500C9DA42 /* SpotifyiOS in Frameworks */ = {isa = PBXBuildFile; productRef = A13E80F42F9411D500C9DA42 /* SpotifyiOS */; };
+		A1BECA982FC3336200274761 /* SpotifyiOS in Frameworks */ = {isa = PBXBuildFile; productRef = A1BECA972FC3336200274761 /* SpotifyiOS */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,7 +40,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A13E80F52F9411D500C9DA42 /* SpotifyiOS in Frameworks */,
+				A1BECA982FC3336200274761 /* SpotifyiOS in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -83,7 +83,7 @@
 			);
 			name = NilsApp;
 			packageProductDependencies = (
-				A13E80F42F9411D500C9DA42 /* SpotifyiOS */,
+				A1BECA972FC3336200274761 /* SpotifyiOS */,
 			);
 			productName = NilsApp;
 			productReference = A1BB16932F940953002FB419 /* NilsApp.app */;
@@ -114,7 +114,7 @@
 			mainGroup = A1BB168A2F940953002FB419;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				A13E80F32F9411D500C9DA42 /* XCRemoteSwiftPackageReference "ios-sdk" */,
+				A1BECA962FC3336200274761 /* XCRemoteSwiftPackageReference "ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A1BB16942F940953002FB419 /* Products */;
@@ -362,20 +362,20 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
-		A13E80F32F9411D500C9DA42 /* XCRemoteSwiftPackageReference "ios-sdk" */ = {
+		A1BECA962FC3336200274761 /* XCRemoteSwiftPackageReference "ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/spotify/ios-sdk.git";
+			repositoryURL = "https://github.com/spotify/ios-sdk";
 			requirement = {
-				branch = master;
-				kind = branch;
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.0.0;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		A13E80F42F9411D500C9DA42 /* SpotifyiOS */ = {
+		A1BECA972FC3336200274761 /* SpotifyiOS */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = A13E80F32F9411D500C9DA42 /* XCRemoteSwiftPackageReference "ios-sdk" */;
+			package = A1BECA962FC3336200274761 /* XCRemoteSwiftPackageReference "ios-sdk" */;
 			productName = SpotifyiOS;
 		};
 /* End XCSwiftPackageProductDependency section */

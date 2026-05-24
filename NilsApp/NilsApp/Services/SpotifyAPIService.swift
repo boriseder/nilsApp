@@ -34,12 +34,22 @@ final class SpotifyAPIService: ObservableObject {
 
     private func setupAPI() {
         logger.debug("SpotifyAPIService initialized.")
-        loadFromKeychain()
-        guard authState != nil else { self.isAuthorized = false; return }
 
-        // Don't set isAuthorized=true until the token is confirmed valid.
-        // Setting it optimistically causes all ViewModels to fire warm-up fetches
-        // simultaneously before a valid token exists, producing redundant refresh calls.
+        // Read from Keychain synchronously — it's fast enough at launch (~5 ms)
+        // and avoids spinning up the Swift concurrency runtime before the first
+        // frame renders (Task.detached was causing ~25 s startup on iPad).
+        loadFromKeychain()
+
+        guard let state = authState else { self.isAuthorized = false; return }
+
+        if state.expirationDate > Date() {
+            // Token still valid — unblock the UI immediately.
+            self.isAuthorized = true
+            logger.info("Token still valid, UI unblocked immediately.")
+        }
+
+        // Refresh token in the background. Regular Task (not detached) so the
+        // concurrency runtime is initialised lazily rather than at launch.
         Task {
             do {
                 try await forceTokenRefresh()
@@ -49,6 +59,19 @@ final class SpotifyAPIService: ObservableObject {
                 self.isAuthorized = false
                 logger.warning("Startup token refresh failed: \(error.localizedDescription)")
             }
+        }
+    }
+
+    private func loadFromKeychain() {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
+                                 kSecAttrAccount as String: keychainKey,
+                                 kSecReturnData as String: true,
+                                 kSecMatchLimit as String: kSecMatchLimitOne]
+        var ref: AnyObject?
+        if SecItemCopyMatching(q as CFDictionary, &ref) == errSecSuccess,
+           let data = ref as? Data {
+            self.authState = try? JSONDecoder().decode(AuthState.self, from: data)
+            logger.info("Loaded Spotify auth from Keychain.")
         }
     }
 
@@ -131,7 +154,10 @@ final class SpotifyAPIService: ObservableObject {
             do {
                 let (data, response) = try await session.data(for: request)
                 try self.handleTokenResponse(data: data, response: response)
-                self.isAuthorized = true; self.requiresReauthentication = false
+                // NOTE: Do NOT set isAuthorized here. Each call site (setupAPI,
+                // handleRedirectURL) owns that transition to avoid firing the
+                // @Published publisher multiple times for a single auth event.
+                self.requiresReauthentication = false
                 return self.authState!.accessToken
             } catch {
                 self.isAuthorized = false; self.requiresReauthentication = true
@@ -152,19 +178,6 @@ final class SpotifyAPIService: ObservableObject {
                                  kSecAttrAccount as String: keychainKey]
         if SecItemUpdate(q as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecItemNotFound {
             var n = q; n[kSecValueData as String] = data; SecItemAdd(n as CFDictionary, nil)
-        }
-    }
-
-    private func loadFromKeychain() {
-        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
-                                 kSecAttrAccount as String: keychainKey,
-                                 kSecReturnData as String: true,
-                                 kSecMatchLimit as String: kSecMatchLimitOne]
-        var ref: AnyObject?
-        if SecItemCopyMatching(q as CFDictionary, &ref) == errSecSuccess,
-           let data = ref as? Data {
-            self.authState = try? JSONDecoder().decode(AuthState.self, from: data)
-            logger.info("Loaded Spotify auth from Keychain.")
         }
     }
 
